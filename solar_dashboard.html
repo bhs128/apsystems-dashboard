@@ -628,14 +628,17 @@ function renderSlotEditor() {
   fields.forEach(function(f) { html += '<th style="white-space:nowrap">' + f.label + '</th>'; });
   html += '</tr>';
 
+  var groupBg = {slot:'#f59e0b0d', panel:'#22c55e0d', inverter:'#3b82f60d', other:'transparent'};
+
   slotCfgData.forEach(function(p, idx) {
     var shortUid = p.inverter_uid.slice(-6);
     var rowStyle = (p.panel_removed_date || p.inverter_removed_date) ? ' style="opacity:0.45"' : '';
     html += '<tr' + rowStyle + '><td style="color:#94a3b8;white-space:nowrap;font-family:monospace">' +
             shortUid + '-' + p.channel + '</td>';
     fields.forEach(function(f) {
+      var bg = ' style="background:' + groupBg[f.group] + '"';
       if (f.key === 'array_id') {
-        html += '<td><select data-idx="' + idx + '" data-field="array_id" style="min-width:' + f.w + '">';
+        html += '<td' + bg + '><select data-idx="' + idx + '" data-field="array_id" style="min-width:' + f.w + '">';
         html += '<option value="">\u2014</option>';
         arrayCfgData.forEach(function(a) {
           if (a.array_id != null) {
@@ -645,7 +648,7 @@ function renderSlotEditor() {
         });
         html += '</select></td>';
       } else if (f.key === 'string_id') {
-        html += '<td><select data-idx="' + idx + '" data-field="string_id" style="min-width:' + f.w + '">';
+        html += '<td' + bg + '><select data-idx="' + idx + '" data-field="string_id" style="min-width:' + f.w + '">';
         html += '<option value="">\u2014</option>';
         stringCfgData.forEach(function(s) {
           if (s.string_id != null) {
@@ -656,7 +659,7 @@ function renderSlotEditor() {
         html += '</select></td>';
       } else {
         var val = p[f.key] != null ? p[f.key] : '';
-        html += '<td><input type="' + f.type + '" data-idx="' + idx + '" data-field="' + f.key +
+        html += '<td' + bg + '><input type="' + f.type + '" data-idx="' + idx + '" data-field="' + f.key +
                 '" value="' + String(val).replace(/"/g, '&quot;') +
                 '" style="min-width:' + f.w + '"></td>';
       }
