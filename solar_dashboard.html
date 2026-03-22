@@ -465,7 +465,8 @@ async function loadPanelConfig() {
         panel_height_mm: e.panel_height_mm != null ? e.panel_height_mm : '',
         panel_serial: e.panel_serial || '',
         panel_install_date: e.panel_install_date || '',
-        removed_date: e.removed_date || '',
+        panel_removed_date: e.panel_removed_date || '',
+        inverter_removed_date: e.inverter_removed_date || '',
         notes: e.notes || ''
       });
     });
@@ -602,8 +603,9 @@ function renderSlotEditor() {
     {key:'panel_width_mm', label:'W mm', type:'number', w:'60px'},
     {key:'panel_height_mm', label:'H mm', type:'number', w:'60px'},
     {key:'panel_serial', label:'Serial', type:'text', w:'90px'},
-    {key:'panel_install_date', label:'Installed', type:'date', w:'110px'},
-    {key:'removed_date', label:'Removed', type:'date', w:'110px'},
+    {key:'panel_install_date', label:'Panel Installed', type:'date', w:'110px'},
+    {key:'panel_removed_date', label:'Panel Removed', type:'date', w:'110px'},
+    {key:'inverter_removed_date', label:'Inv Removed', type:'date', w:'110px'},
     {key:'notes', label:'Notes', type:'text', w:'120px'}
   ];
 
@@ -613,7 +615,7 @@ function renderSlotEditor() {
 
   slotCfgData.forEach(function(p, idx) {
     var shortUid = p.inverter_uid.slice(-6);
-    var rowStyle = p.removed_date ? ' style="opacity:0.45"' : '';
+    var rowStyle = (p.panel_removed_date || p.inverter_removed_date) ? ' style="opacity:0.45"' : '';
     html += '<tr' + rowStyle + '><td style="color:#94a3b8;white-space:nowrap;font-family:monospace">' +
             shortUid + '-' + p.channel + '</td>';
     fields.forEach(function(f) {
@@ -677,7 +679,8 @@ async function saveSlots() {
     if (p.panel_height_mm !== '') row.panel_height_mm = Number(p.panel_height_mm);
     if (p.panel_serial) row.panel_serial = p.panel_serial;
     if (p.panel_install_date) row.panel_install_date = p.panel_install_date;
-    if (p.removed_date) row.removed_date = p.removed_date;
+    if (p.panel_removed_date) row.panel_removed_date = p.panel_removed_date;
+    if (p.inverter_removed_date) row.inverter_removed_date = p.inverter_removed_date;
     if (p.notes) row.notes = p.notes;
     return row;
   });
