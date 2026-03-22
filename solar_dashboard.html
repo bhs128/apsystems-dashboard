@@ -111,9 +111,12 @@
     <select id="sliderDayPick"></select>
     <button onclick="loadSliderDay()" style="background:#f59e0b;color:#0f172a;border:none;padding:0.35rem 0.9rem;border-radius:0.4rem;cursor:pointer;font-weight:600;font-size:0.8rem">Load</button>
   </div>
-  <div class="slider-wrap" id="sliderControls" style="display:none">
-    <input type="range" id="timeSlider" min="0" max="0" value="0">
-    <span class="slider-time" id="sliderTimeLabel">--:--</span>
+  <div id="sliderControls" style="display:none">
+    <div class="slider-wrap">
+      <input type="range" id="timeSlider" min="0" max="0" value="0" style="width:100%">
+      <span class="slider-time" id="sliderTimeLabel">--:--</span>
+    </div>
+    <div id="sliderTickLabels" style="display:flex;justify-content:space-between;padding:0 2px;margin-top:-0.25rem;margin-bottom:0.25rem"></div>
   </div>
 </div>
 <div class="chart-row">
@@ -732,7 +735,44 @@ async function loadSliderDay() {
   slider.min = 0;
   slider.max = sliderTimestamps.length - 1;
   slider.value = 0;
-  document.getElementById('sliderControls').style.display = 'flex';
+  document.getElementById('sliderControls').style.display = 'block';
+
+  // Build hourly tick marks
+  var tickHtml = '';
+  var seenHours = {};
+  sliderTimestamps.forEach(function(ts, i) {
+    var hh = ts.slice(11, 13);
+    var mm = ts.slice(14, 16);
+    if (!seenHours[hh] && mm === '00') { seenHours[hh] = i; }
+    else if (!seenHours[hh]) {
+      // pick closest to :00
+      if (!seenHours['_first_' + hh] || Math.abs(parseInt(mm)) < Math.abs(parseInt(sliderTimestamps[seenHours['_first_' + hh]].slice(14,16)))) {
+        seenHours['_first_' + hh] = i;
+      }
+    }
+  });
+  // Collect hour indices
+  var hourIndices = [];
+  var allHours = Object.keys(seenHours).filter(function(k) { return k.length === 2; }).sort();
+  allHours.forEach(function(hh) { hourIndices.push({ hour: hh, idx: seenHours[hh] }); });
+  // Fill in any hours only seen as _first_
+  Object.keys(seenHours).filter(function(k) { return k.startsWith('_first_'); }).forEach(function(k) {
+    var hh = k.slice(7);
+    if (!seenHours[hh]) hourIndices.push({ hour: hh, idx: seenHours[k] });
+  });
+  hourIndices.sort(function(a, b) { return a.idx - b.idx; });
+
+  var total = sliderTimestamps.length - 1;
+  var labelHtml = '';
+  hourIndices.forEach(function(h) {
+    var pct = total > 0 ? (h.idx / total * 100) : 0;
+    labelHtml += '<span style="position:absolute;left:' + pct.toFixed(1) + '%;transform:translateX(-50%);' +
+      'font-size:0.6rem;color:#64748b">' + h.hour + ':00</span>';
+  });
+  document.getElementById('sliderTickLabels').innerHTML = '';
+  document.getElementById('sliderTickLabels').style.position = 'relative';
+  document.getElementById('sliderTickLabels').style.height = '14px';
+  document.getElementById('sliderTickLabels').innerHTML = labelHtml;
 
   renderSliderGrid(0);
   loadPanelOverlay(dateVal);
