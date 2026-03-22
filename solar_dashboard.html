@@ -615,17 +615,25 @@ function renderSlotEditor() {
   var otherCols = fields.filter(function(f) { return f.group === 'other'; }).length;
 
   // Group header row
+  var divider = 'border-left:2px solid #334155';
   var html = '<table><tr>' +
     '<th></th>' +
-    '<th colspan="' + slotCols + '" style="text-align:center;color:#f59e0b;border-bottom:2px solid #f59e0b33">Slot</th>' +
-    '<th colspan="' + panelCols + '" style="text-align:center;color:#22c55e;border-bottom:2px solid #22c55e33">Panel Info</th>' +
-    '<th colspan="' + invCols + '" style="text-align:center;color:#3b82f6;border-bottom:2px solid #3b82f633">Inverter Info</th>' +
-    (otherCols ? '<th colspan="' + otherCols + '"></th>' : '') +
+    '<th colspan="' + slotCols + '" style="text-align:center;color:#f59e0b;border-bottom:2px solid #f59e0b33;' + divider + '">Slot</th>' +
+    '<th colspan="' + panelCols + '" style="text-align:center;color:#22c55e;border-bottom:2px solid #22c55e33;' + divider + '">Panel Info</th>' +
+    '<th colspan="' + invCols + '" style="text-align:center;color:#3b82f6;border-bottom:2px solid #3b82f633;' + divider + '">Inverter Info</th>' +
+    (otherCols ? '<th colspan="' + otherCols + '" style="' + divider + '"></th>' : '') +
     '</tr>';
+
+  // Track first key in each group for divider borders
+  var groupFirst = {};
+  fields.forEach(function(f) { if (!groupFirst[f.group]) groupFirst[f.group] = f.key; });
 
   // Column label row
   html += '<tr><th style="white-space:nowrap">Inverter-Ch</th>';
-  fields.forEach(function(f) { html += '<th style="white-space:nowrap">' + f.label + '</th>'; });
+  fields.forEach(function(f) {
+    var dv = (f.key === groupFirst[f.group]) ? divider + ';' : '';
+    html += '<th style="white-space:nowrap;' + dv + '">' + f.label + '</th>';
+  });
   html += '</tr>';
 
   var groupBg = {slot:'#f59e0b0d', panel:'#22c55e0d', inverter:'#3b82f60d', other:'transparent'};
@@ -636,7 +644,8 @@ function renderSlotEditor() {
     html += '<tr' + rowStyle + '><td style="color:#94a3b8;white-space:nowrap;font-family:monospace">' +
             shortUid + '-' + p.channel + '</td>';
     fields.forEach(function(f) {
-      var bg = ' style="background:' + groupBg[f.group] + '"';
+      var dv = (f.key === groupFirst[f.group]) ? divider + ';' : '';
+      var bg = ' style="' + dv + 'background:' + groupBg[f.group] + '"';
       if (f.key === 'array_id') {
         html += '<td' + bg + '><select data-idx="' + idx + '" data-field="array_id" style="min-width:' + f.w + '">';
         html += '<option value="">\u2014</option>';
