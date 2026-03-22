@@ -22,7 +22,7 @@ Wants=network-online.target
 Type=oneshot
 User=__USER__
 WorkingDirectory=__INSTALL_DIR__
-ExecStart=/usr/bin/python3 __INSTALL_DIR__/solar_sync.py --sync
+ExecStart=__INSTALL_DIR__/venv/bin/python __INSTALL_DIR__/solar_sync.py --sync
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-__INSTALL_DIR__/.env
 TimeoutStartSec=600
