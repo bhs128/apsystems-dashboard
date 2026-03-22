@@ -664,15 +664,18 @@ var sliderTimestamps = []; // sorted unique timestamps
 async function loadSliderDayPicker() {
   var sel = document.getElementById('sliderDayPick');
   try {
-    var dates = await get('/api/panel_dates');
+    var items = await get('/api/panel_dates');
     sel.innerHTML = '';
-    dates.forEach(function(d) {
+    items.forEach(function(item) {
       var opt = document.createElement('option');
-      opt.value = d; opt.textContent = d;
+      opt.value = item.date;
+      var label = item.date;
+      if (item.kwh > 0) label += '  \u2014  ' + item.kwh.toFixed(1) + ' kWh';
+      opt.textContent = label;
       sel.appendChild(opt);
     });
     // Select the most recent date
-    if (dates.length) sel.value = dates[dates.length - 1];
+    if (items.length) sel.value = items[items.length - 1].date;
   } catch(e) {
     sel.innerHTML = '<option>No data</option>';
   }
@@ -733,8 +736,22 @@ function renderSliderGrid(idx) {
   var arrayNames = Object.keys(arrayDims).sort();
   var BASE_W = 90, BASE_H = 72;
 
-  var html = '<div style="font-size:0.75rem;color:#64748b;margin-bottom:0.5rem">System total: <strong style="color:#f59e0b">' +
-    (row.total || 0).toFixed(0) + ' W</strong></div>';
+  // System total gauge bar
+  var sysTotal = row.total || 0;
+  var sysMax = 0;
+  allLabels.forEach(function(lbl) { sysMax += getCeiling(lbl); });
+  var sysPct = sysMax > 0 ? Math.min(sysTotal / sysMax, 1) : 0;
+  var sysColor = gradientColor(sysPct);
+  var html = '<div style="position:relative;overflow:hidden;background:#0f172a;border:1px solid #334155;' +
+    'border-radius:6px;height:28px;margin-bottom:0.75rem;max-width:600px">' +
+    '<div style="position:absolute;top:0;left:0;bottom:0;width:' + (sysPct * 100).toFixed(1) + '%;' +
+    'background:' + sysColor + ';opacity:0.6;transition:width 0.15s"></div>' +
+    '<div style="position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;' +
+    'height:100%;padding:0 10px;font-size:0.75rem">' +
+    '<span style="color:#94a3b8">System total</span>' +
+    '<span><strong style="color:#f59e0b">' + sysTotal.toFixed(0) + ' W</strong>' +
+    ' <span style="color:#64748b">/ ' + sysMax.toFixed(0) + ' W (' + (sysPct * 100).toFixed(0) + '%)</span></span>' +
+    '</div></div>';
 
   arrayNames.forEach(function(aName) {
     var dim = arrayDims[aName];

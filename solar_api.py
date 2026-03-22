@@ -114,9 +114,13 @@ def api_panel_readings():
 
 @app.route('/api/panel_dates')
 def api_panel_dates():
-    """Return sorted list of dates that have panel readings."""
+    """Return sorted list of {date, kwh} for dates with panel readings."""
     dates = sorted(db.get_dates_with_data('panel_readings'))
-    return jsonify(dates)
+    energy = db.get_daily_energy()
+    kwh_map = {}
+    if not energy.empty:
+        kwh_map = dict(zip(energy['date'].astype(str), energy['energy_kwh']))
+    return jsonify([{'date': d, 'kwh': round(kwh_map.get(d, 0), 2)} for d in dates])
 
 
 @app.route('/api/panel_daily')
