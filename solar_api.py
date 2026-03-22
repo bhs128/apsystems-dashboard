@@ -53,7 +53,8 @@ def df_to_json(df):
     for col in df.columns:
         if hasattr(df[col], 'dt'):
             df[col] = df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
-    return df.to_dict(orient='records')
+    # Replace NaN with None so jsonify produces valid JSON (not literal NaN)
+    return df.where(df.notna(), None).to_dict(orient='records')
 
 
 # ------------------------------------------------------------------
@@ -188,7 +189,7 @@ def api_inverter_telemetry():
 def api_panels_get():
     """Return panel metadata (user-assigned config + specs)."""
     df = db.get_panels()
-    return jsonify(df.to_dict(orient='records'))
+    return jsonify(df.where(df.notna(), None).to_dict(orient='records'))
 
 
 @app.route('/api/panels', methods=['PUT', 'POST'])
