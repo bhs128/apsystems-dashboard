@@ -350,67 +350,247 @@ async function loadFinance() {
   });
 }
 
-// ---- Panel heatmap ----
+// ---- Shared: build slot→position map ----
+function buildSlotMap(slots) {
+  // Returns { label → {array_name, row, col, panel_name}, ... }
+  // and { array_name → {maxRow, maxCol} }
+  var map = {}, arrays = {};
+  slots.forEach(function(s) {
+    if (!s.inverter_uid || !s.inverter_channel) return;
+    var label = s.inverter_uid + '-' + s.inverter_channel;
+    map[label] = { array_name: s.array_name, row: s.row, col: s.col,
+                   panel_name: s.panel_name || label };
+    if (!arrays[s.array_name]) arrays[s.array_name] = { maxRow: 0, maxCol: 0 };
+    if (s.row > arrays[s.array_name].maxRow) arrays[s.array_name].maxRow = s.row;
+    if (s.col > arrays[s.array_name].maxCol) arrays[s.array_name].maxCol = s.col;
+  });
+  return { map: map, arrays: arrays };
+}
+
+function heatColor(v, maxV) {
+  var pct = maxV > 0 ? v / maxV : 0;
+  var r = Math.round(15 + 240 * (1 - pct));
+  var g = Math.round(15 + 150 * pct);
+  return 'rgb(' + r + ',' + g + ',15)';
+}
+
+// ---- Panel heatmap (physical grid) ----
 async function loadPanelHeat() {
-  var data = await get('/api/panel_daily');
+  var results = await Promise.all([get('/api/panel_daily'), get('/api/slots')]);
+  var data = results[0], slots = results[1];
   var box = document.getElementById('heatmapBox');
   if (!data.length) { box.innerHTML = '<p class="loading">No panel data</p>'; return; }
+
+  var slotInfo = buildSlotMap(slots);
+  var slotMap = slotInfo.map, arrayDims = slotInfo.arrays;
+
+  // Build lookup and find dates
   var dateSet = {}, labelSet = {};
   data.forEach(function(r) { dateSet[r.date] = 1; labelSet[r.label] = 1; });
   var allDates = Object.keys(dateSet).sort();
   var dates = allDates.slice(-7);
-  var labels = Object.keys(labelSet).sort();
   var lookup = {};
   data.forEach(function(r) { lookup[r.date + '|' + r.label] = r.kwh; });
+
+  // Global max for consistent color scale
   var maxV = 0;
-  labels.forEach(function(lbl) {
+  Object.keys(labelSet).forEach(function(lbl) {
     dates.forEach(function(d) {
       var v = lookup[d + '|' + lbl] || 0;
       if (v > maxV) maxV = v;
     });
   });
-  var html = '<table><tr><th></th>';
-  dates.forEach(function(d) { html += '<th>' + d.slice(5) + '</th>'; });
-  html += '</tr>';
-  labels.forEach(function(lbl) {
-    html += '<tr><td style="color:#94a3b8;white-space:nowrap">' + lbl + '</td>';
+
+  // Separate assigned vs unassigned labels
+  var allLabels = Object.keys(labelSet).sort();
+  var unassigned = allLabels.filter(function(l) { return !slotMap[l]; });
+
+  var html = '';
+  // Render each array as a grid per date
+  var arrayNames = Object.keys(arrayDims).sort();
+  arrayNames.forEach(function(aName) {
+    var dim = arrayDims[aName];
+    html += '<h3 style="color:#94a3b8;margin:1rem 0 0.25rem">' + aName + '</h3>';
+    // Grid of dates: each date gets a mini physical grid
+    html += '<div style="display:flex;flex-wrap:wrap;gap:1rem">';
     dates.forEach(function(d) {
-      var v = lookup[d + '|' + lbl] || 0;
-      var pct = maxV > 0 ? v / maxV : 0;
-      var r = Math.round(15 + 240 * (1 - pct));
-      var g = Math.round(15 + 150 * pct);
-      html += '<td style="background:rgb(' + r + ',' + g + ',15);color:#f8fafc">' +
-              v.toFixed(2) + '</td>';
+      html += '<div><div style="color:#64748b;font-size:0.75rem;margin-bottom:0.25rem;text-align:center">' + d.slice(5) + '</div>';
+      html += '<table style="border-collapse:collapse">';
+      for (var r = 1; r <= dim.maxRow; r++) {
+        html += '<tr>';
+        for (var c = 1; c <= dim.maxCol; c++) {
+          // Find the label for this position
+          var cellLabel = null;
+          for (var lbl in slotMap) {
+            var s = slotMap[lbl];
+            if (s.array_name === aName && s.row === r && s.col === c) { cellLabel = lbl; break; }
+          }
+          if (cellLabel) {
+            var v = lookup[d + '|' + cellLabel] || 0;
+            var bg = heatColor(v, maxV);
+            html += '<td style="background:' + bg + ';color:#f8fafc;text-align:center;' +
+              'padding:4px 6px;font-size:0.7rem;min-width:52px;border:1px solid #1e293b" ' +
+              'title="' + cellLabel + ' (' + slotMap[cellLabel].panel_name + ')\n' + d + ': ' + v.toFixed(2) + ' kWh">' +
+              '<div style="font-weight:600">' + v.toFixed(2) + '</div>' +
+              '<div style="font-size:0.6rem;opacity:0.7">' + slotMap[cellLabel].panel_name + '</div></td>';
+          } else {
+            html += '<td style="background:#0f172a;color:#334155;text-align:center;' +
+              'padding:4px 6px;font-size:0.6rem;min-width:52px;border:1px solid #1e293b">&mdash;</td>';
+          }
+        }
+        html += '</tr>';
+      }
+      html += '</table></div>';
     });
-    html += '</tr>';
+    html += '</div>';
   });
-  html += '</table>';
+
+  // Unassigned panels (not in any slot) — fallback flat table
+  if (unassigned.length) {
+    html += '<h3 style="color:#94a3b8;margin:1rem 0 0.25rem">Unassigned Panels</h3>';
+    html += '<table><tr><th></th>';
+    dates.forEach(function(d) { html += '<th>' + d.slice(5) + '</th>'; });
+    html += '</tr>';
+    unassigned.forEach(function(lbl) {
+      html += '<tr><td style="color:#94a3b8;white-space:nowrap">' + lbl + '</td>';
+      dates.forEach(function(d) {
+        var v = lookup[d + '|' + lbl] || 0;
+        var bg = heatColor(v, maxV);
+        html += '<td style="background:' + bg + ';color:#f8fafc">' + v.toFixed(2) + '</td>';
+      });
+      html += '</tr>';
+    });
+    html += '</table>';
+  }
+
+  // If no slots configured at all, show everything as flat
+  if (!arrayNames.length) {
+    html = '<table><tr><th></th>';
+    dates.forEach(function(d) { html += '<th>' + d.slice(5) + '</th>'; });
+    html += '</tr>';
+    allLabels.forEach(function(lbl) {
+      html += '<tr><td style="color:#94a3b8;white-space:nowrap">' + lbl + '</td>';
+      dates.forEach(function(d) {
+        var v = lookup[d + '|' + lbl] || 0;
+        var bg = heatColor(v, maxV);
+        html += '<td style="background:' + bg + ';color:#f8fafc">' + v.toFixed(2) + '</td>';
+      });
+      html += '</tr>';
+    });
+    html += '</table>';
+  }
+
   box.innerHTML = html;
 }
 
-// ---- Panel summary ----
+// ---- Panel summary (physical grid) ----
 async function loadPanelSummary() {
-  var data = await get('/api/panel_summary');
+  var results = await Promise.all([get('/api/panel_summary'), get('/api/slots')]);
+  var data = results[0], slots = results[1];
   var box = document.getElementById('panelSummaryBox');
   if (!data.length) { box.innerHTML = '<p class="loading">No panel data</p>'; return; }
+
+  var slotInfo = buildSlotMap(slots);
+  var slotMap = slotInfo.map, arrayDims = slotInfo.arrays;
+
+  // Build lookup by label
+  var sumLookup = {};
+  data.forEach(function(r) { sumLookup[r.label] = r; });
   var maxKwh = Math.max.apply(null, data.map(function(r) { return r.total_kwh; }));
-  var html = '<table><tr><th>Panel</th><th>Total kWh</th><th>Best Hour (W)</th><th>Points</th></tr>';
-  data.sort(function(a, b) { return b.total_kwh - a.total_kwh; });
-  data.forEach(function(r) {
-    var pct = maxKwh > 0 ? r.total_kwh / maxKwh : 0;
-    var barW = Math.round(pct * 100);
-    var color = pct > 0.9 ? '#22c55e' : pct > 0.75 ? '#f59e0b' : '#ef4444';
-    html += '<tr>' +
-      '<td style="color:#94a3b8;white-space:nowrap">' + r.label + '</td>' +
-      '<td><div style="display:flex;align-items:center;gap:0.5rem">' +
-        '<div style="background:' + color + '44;border-left:3px solid ' + color +
-        ';height:1rem;width:' + barW + '%"></div>' +
-        '<span>' + r.total_kwh.toFixed(2) + '</span></div></td>' +
-      '<td>' + (r.best_hour_w || 0).toFixed(0) + ' W</td>' +
-      '<td style="color:#64748b">(' + (r.data_points || 0).toLocaleString() + ')</td>' +
-      '</tr>';
+
+  var allLabels = Object.keys(sumLookup).sort();
+  var unassigned = allLabels.filter(function(l) { return !slotMap[l]; });
+  var arrayNames = Object.keys(arrayDims).sort();
+
+  function summaryColor(pct) {
+    return pct > 0.9 ? '#22c55e' : pct > 0.75 ? '#f59e0b' : '#ef4444';
+  }
+
+  var html = '';
+  arrayNames.forEach(function(aName) {
+    var dim = arrayDims[aName];
+    html += '<h3 style="color:#94a3b8;margin:1rem 0 0.25rem">' + aName + '</h3>';
+    html += '<table style="border-collapse:collapse">';
+    for (var r = 1; r <= dim.maxRow; r++) {
+      html += '<tr>';
+      for (var c = 1; c <= dim.maxCol; c++) {
+        var cellLabel = null;
+        for (var lbl in slotMap) {
+          var s = slotMap[lbl];
+          if (s.array_name === aName && s.row === r && s.col === c) { cellLabel = lbl; break; }
+        }
+        if (cellLabel && sumLookup[cellLabel]) {
+          var rec = sumLookup[cellLabel];
+          var pct = maxKwh > 0 ? rec.total_kwh / maxKwh : 0;
+          var color = summaryColor(pct);
+          html += '<td style="background:' + color + '22;border:2px solid ' + color +
+            ';text-align:center;padding:6px 8px;min-width:80px;border-radius:4px" ' +
+            'title="' + cellLabel + '\nTotal: ' + rec.total_kwh.toFixed(2) + ' kWh\nBest Hour: ' +
+            (rec.best_hour_w || 0).toFixed(0) + ' W\nPoints: ' + (rec.data_points || 0).toLocaleString() + '">' +
+            '<div style="font-size:0.65rem;color:#94a3b8">' + slotMap[cellLabel].panel_name + '</div>' +
+            '<div style="font-weight:700;font-size:0.9rem;color:#f8fafc">' + rec.total_kwh.toFixed(1) + '</div>' +
+            '<div style="font-size:0.6rem;color:#64748b">' + (rec.best_hour_w || 0).toFixed(0) + ' W pk</div>' +
+            '</td>';
+        } else if (cellLabel) {
+          html += '<td style="background:#1e293b;text-align:center;padding:6px 8px;' +
+            'min-width:80px;border:1px solid #334155;border-radius:4px;color:#475569">' +
+            '<div style="font-size:0.65rem">' + slotMap[cellLabel].panel_name + '</div>' +
+            '<div style="font-size:0.75rem">No data</div></td>';
+        } else {
+          html += '<td style="background:#0f172a;text-align:center;padding:6px 8px;' +
+            'min-width:80px;border:1px solid #1e293b;border-radius:4px;color:#334155">&mdash;</td>';
+        }
+      }
+      html += '</tr>';
+    }
+    html += '</table>';
   });
-  html += '</table>';
+
+  // Unassigned panels: flat table
+  if (unassigned.length) {
+    html += '<h3 style="color:#94a3b8;margin:1rem 0 0.25rem">Unassigned Panels</h3>';
+    html += '<table><tr><th>Panel</th><th>Total kWh</th><th>Best Hour (W)</th><th>Points</th></tr>';
+    unassigned.sort(function(a, b) { return (sumLookup[b] ? sumLookup[b].total_kwh : 0) - (sumLookup[a] ? sumLookup[a].total_kwh : 0); });
+    unassigned.forEach(function(lbl) {
+      var r = sumLookup[lbl];
+      if (!r) return;
+      var pct = maxKwh > 0 ? r.total_kwh / maxKwh : 0;
+      var barW = Math.round(pct * 100);
+      var color = summaryColor(pct);
+      html += '<tr>' +
+        '<td style="color:#94a3b8;white-space:nowrap">' + lbl + '</td>' +
+        '<td><div style="display:flex;align-items:center;gap:0.5rem">' +
+          '<div style="background:' + color + '44;border-left:3px solid ' + color +
+          ';height:1rem;width:' + barW + '%"></div>' +
+          '<span>' + r.total_kwh.toFixed(2) + '</span></div></td>' +
+        '<td>' + (r.best_hour_w || 0).toFixed(0) + ' W</td>' +
+        '<td style="color:#64748b">(' + (r.data_points || 0).toLocaleString() + ')</td>' +
+        '</tr>';
+    });
+    html += '</table>';
+  }
+
+  // If no slots at all, full flat table
+  if (!arrayNames.length) {
+    html = '<table><tr><th>Panel</th><th>Total kWh</th><th>Best Hour (W)</th><th>Points</th></tr>';
+    data.sort(function(a, b) { return b.total_kwh - a.total_kwh; });
+    data.forEach(function(r) {
+      var pct = maxKwh > 0 ? r.total_kwh / maxKwh : 0;
+      var barW = Math.round(pct * 100);
+      var color = summaryColor(pct);
+      html += '<tr>' +
+        '<td style="color:#94a3b8;white-space:nowrap">' + r.label + '</td>' +
+        '<td><div style="display:flex;align-items:center;gap:0.5rem">' +
+          '<div style="background:' + color + '44;border-left:3px solid ' + color +
+          ';height:1rem;width:' + barW + '%"></div>' +
+          '<span>' + r.total_kwh.toFixed(2) + '</span></div></td>' +
+        '<td>' + (r.best_hour_w || 0).toFixed(0) + ' W</td>' +
+        '<td style="color:#64748b">(' + (r.data_points || 0).toLocaleString() + ')</td>' +
+        '</tr>';
+    });
+    html += '</table>';
+  }
+
   box.innerHTML = html;
 }
 
