@@ -101,7 +101,7 @@ def api_system_readings():
 def api_daily_energy():
     start, end = date_params()
     df = db.get_daily_energy(start_date=start, end_date=end)
-    return jsonify(df.to_dict(orient='records'))
+    return jsonify(json.loads(df.to_json(orient='records')))
 
 
 @app.route('/api/panel_readings')
@@ -123,7 +123,7 @@ def api_panel_daily():
     df['label'] = df['inverter_uid'] + '-' + df['channel'].astype(str)
     agg = df.groupby(['date', 'label'])['power_w'].sum().reset_index()
     agg['kwh'] = round(agg['power_w'] * 5 / 60 / 1000, 3)
-    return jsonify(agg[['date', 'label', 'kwh']].to_dict(orient='records'))
+    return jsonify(json.loads(agg[['date', 'label', 'kwh']].to_json(orient='records')))
 
 
 @app.route('/api/panel_summary')
@@ -146,7 +146,7 @@ def api_panel_summary():
     merged = totals.merge(best, on='label', how='left')
     result = merged[['label', 'total_kwh', 'best_hour_w', 'count']].rename(
         columns={'count': 'data_points'})
-    return jsonify(result.to_dict(orient='records'))
+    return jsonify(json.loads(result.to_json(orient='records')))
 
 
 @app.route('/api/panel_wide')
@@ -170,13 +170,13 @@ def api_billing():
 @app.route('/api/finance')
 def api_finance():
     df = db.get_finance()
-    return jsonify(df.to_dict(orient='records'))
+    return jsonify(json.loads(df.to_json(orient='records')))
 
 
 @app.route('/api/inverters')
 def api_inverters():
     df = db.get_inverters()
-    return jsonify(df.to_dict(orient='records'))
+    return jsonify(json.loads(df.to_json(orient='records')))
 
 
 @app.route('/api/inverter_telemetry')
