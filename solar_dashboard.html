@@ -54,6 +54,13 @@
            color: #0f172a; padding: 0.6rem 1.2rem; border-radius: 0.5rem;
            font-weight: 600; font-size: 0.85rem; opacity: 0; transition: opacity 0.3s; z-index: 99; }
   .toast.show { opacity: 1; }
+  .slider-wrap { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+  .slider-wrap label { font-size: 0.8rem; color: #94a3b8; }
+  .slider-wrap select { background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+    padding: 0.3rem 0.5rem; border-radius: 0.4rem; font-size: 0.8rem; }
+  .slider-wrap input[type=range] { flex: 1; min-width: 200px; accent-color: #f59e0b; }
+  .slider-time { font-family: monospace; color: #f59e0b; font-size: 1rem; font-weight: 700; min-width: 50px; }
+  .section-label { font-size: 0.75rem; color: #64748b; font-style: italic; margin-bottom: 0.5rem; }
 </style>
 </head>
 <body>
@@ -102,9 +109,26 @@
 </div>
 
 <div class="chart-box">
+  <h2>Interactive Array View</h2>
+  <p class="section-label">Drag the slider to see each panel&rsquo;s instantaneous power output through the day</p>
+  <div class="slider-wrap">
+    <label>Day:</label>
+    <select id="sliderDayPick"></select>
+    <button onclick="loadSliderDay()" style="background:#f59e0b;color:#0f172a;border:none;padding:0.35rem 0.9rem;border-radius:0.4rem;cursor:pointer;font-weight:600;font-size:0.8rem">Load</button>
+  </div>
+  <div class="slider-wrap" id="sliderControls" style="display:none">
+    <input type="range" id="timeSlider" min="0" max="0" value="0">
+    <span class="slider-time" id="sliderTimeLabel">--:--</span>
+  </div>
+  <div id="sliderGridBox"></div>
+</div>
+
+<div class="chart-box">
   <h2>Per-Panel Daily kWh &mdash; Last 7 Days</h2>
+  <p class="section-label">Daily production total per panel</p>
   <div class="heatmap" id="heatmapBox"><div class="loading">Loading ...</div></div>
   <h2 style="margin-top:1rem">Per-Panel Summary</h2>
+  <p class="section-label">Lifetime panel production</p>
   <div id="panelSummaryBox"><div class="loading">Loading ...</div></div>
 </div>
 
@@ -352,14 +376,15 @@ async function loadFinance() {
 
 // ---- Shared: build slot→position map ----
 function buildSlotMap(slots) {
-  // Returns { label → {array_name, row, col, panel_name}, ... }
+  // Returns { label → {array_name, row, col, panel_name, w_mm, h_mm}, ... }
   // and { array_name → {maxRow, maxCol} }
   var map = {}, arrays = {};
   slots.forEach(function(s) {
     if (!s.inverter_uid || !s.inverter_channel) return;
     var label = s.inverter_uid + '-' + s.inverter_channel;
     map[label] = { array_name: s.array_name, row: s.row, col: s.col,
-                   panel_name: s.panel_name || label };
+                   panel_name: s.panel_name || label,
+                   w_mm: s.panel_width_mm || 0, h_mm: s.panel_height_mm || 0 };
     if (!arrays[s.array_name]) arrays[s.array_name] = { maxRow: 0, maxCol: 0 };
     if (s.row > arrays[s.array_name].maxRow) arrays[s.array_name].maxRow = s.row;
     if (s.col > arrays[s.array_name].maxCol) arrays[s.array_name].maxCol = s.col;
@@ -372,6 +397,25 @@ function heatColor(v, maxV) {
   var r = Math.round(15 + 240 * (1 - pct));
   var g = Math.round(15 + 150 * pct);
   return 'rgb(' + r + ',' + g + ',15)';
+}
+
+// Continuous gradient: red → amber → green via HSL
+function gradientColor(pct) {
+  // 0 = hue 0 (red), 0.5 = hue 40 (amber), 1.0 = hue 142 (green)
+  var h = pct * 142;
+  return 'hsl(' + h + ',72%,45%)';
+}
+
+// Compute cell style dimensions to approximate panel aspect ratio
+function panelCellSize(slot, baseW, baseH) {
+  var w = slot.w_mm, h = slot.h_mm;
+  if (!w || !h) return { width: baseW, height: baseH }; // default landscape
+  var ratio = w / h; // >1 = landscape, <1 = portrait
+  if (ratio >= 1) {
+    return { width: baseW, height: Math.round(baseW / ratio) };
+  } else {
+    return { width: Math.round(baseH * ratio), height: baseH };
+  }
 }
 
 // ---- Panel heatmap (physical grid) ----
@@ -483,7 +527,7 @@ async function loadPanelHeat() {
   box.innerHTML = html;
 }
 
-// ---- Panel summary (physical grid) ----
+// ---- Panel summary (physical grid with aspect-ratio cells + bar fill) ----
 async function loadPanelSummary() {
   var results = await Promise.all([get('/api/panel_summary'), get('/api/slots')]);
   var data = results[0], slots = results[1];
@@ -502,15 +546,13 @@ async function loadPanelSummary() {
   var unassigned = allLabels.filter(function(l) { return !slotMap[l]; });
   var arrayNames = Object.keys(arrayDims).sort();
 
-  function summaryColor(pct) {
-    return pct > 0.9 ? '#22c55e' : pct > 0.75 ? '#f59e0b' : '#ef4444';
-  }
+  var BASE_W = 90, BASE_H = 72;
 
   var html = '';
   arrayNames.forEach(function(aName) {
     var dim = arrayDims[aName];
     html += '<h3 style="color:#94a3b8;margin:1rem 0 0.25rem">' + aName + '</h3>';
-    html += '<table style="border-collapse:collapse">';
+    html += '<table style="border-collapse:separate;border-spacing:3px">';
     for (var r = 1; r <= dim.maxRow; r++) {
       html += '<tr>';
       for (var c = 1; c <= dim.maxCol; c++) {
@@ -522,23 +564,30 @@ async function loadPanelSummary() {
         if (cellLabel && sumLookup[cellLabel]) {
           var rec = sumLookup[cellLabel];
           var pct = maxKwh > 0 ? rec.total_kwh / maxKwh : 0;
-          var color = summaryColor(pct);
-          html += '<td style="background:' + color + '22;border:2px solid ' + color +
-            ';text-align:center;padding:6px 8px;min-width:80px;border-radius:4px" ' +
+          var color = gradientColor(pct);
+          var sz = panelCellSize(slotMap[cellLabel], BASE_W, BASE_H);
+          var barH = Math.round(pct * 100);
+          html += '<td style="position:relative;overflow:hidden;width:' + sz.width + 'px;height:' + sz.height + 'px;' +
+            'background:#1e293b;border-radius:4px;vertical-align:bottom;padding:0" ' +
             'title="' + cellLabel + '\nTotal: ' + rec.total_kwh.toFixed(2) + ' kWh\nBest Hour: ' +
             (rec.best_hour_w || 0).toFixed(0) + ' W\nPoints: ' + (rec.data_points || 0).toLocaleString() + '">' +
-            '<div style="font-size:0.65rem;color:#94a3b8">' + slotMap[cellLabel].panel_name + '</div>' +
-            '<div style="font-weight:700;font-size:0.9rem;color:#f8fafc">' + rec.total_kwh.toFixed(1) + '</div>' +
-            '<div style="font-size:0.6rem;color:#64748b">' + (rec.best_hour_w || 0).toFixed(0) + ' W pk</div>' +
-            '</td>';
+            '<div style="position:absolute;bottom:0;left:0;right:0;height:' + barH + '%;' +
+            'background:' + color + '44;border-top:2px solid ' + color + '"></div>' +
+            '<div style="position:relative;z-index:1;text-align:center;padding:4px 2px;height:100%;' +
+            'display:flex;flex-direction:column;justify-content:center">' +
+            '<div style="font-size:0.6rem;color:#94a3b8">' + slotMap[cellLabel].panel_name + '</div>' +
+            '<div style="font-weight:700;font-size:0.85rem;color:#f8fafc">' + rec.total_kwh.toFixed(1) + ' <span style="font-size:0.6rem;font-weight:400">kWh</span></div>' +
+            '<div style="font-size:0.55rem;color:#64748b">' + (rec.best_hour_w || 0).toFixed(0) + ' W pk</div>' +
+            '</div></td>';
         } else if (cellLabel) {
-          html += '<td style="background:#1e293b;text-align:center;padding:6px 8px;' +
-            'min-width:80px;border:1px solid #334155;border-radius:4px;color:#475569">' +
-            '<div style="font-size:0.65rem">' + slotMap[cellLabel].panel_name + '</div>' +
-            '<div style="font-size:0.75rem">No data</div></td>';
+          var sz2 = panelCellSize(slotMap[cellLabel], BASE_W, BASE_H);
+          html += '<td style="width:' + sz2.width + 'px;height:' + sz2.height + 'px;' +
+            'background:#1e293b;text-align:center;border-radius:4px;border:1px solid #334155;color:#475569;vertical-align:middle">' +
+            '<div style="font-size:0.6rem">' + slotMap[cellLabel].panel_name + '</div>' +
+            '<div style="font-size:0.7rem">No data</div></td>';
         } else {
-          html += '<td style="background:#0f172a;text-align:center;padding:6px 8px;' +
-            'min-width:80px;border:1px solid #1e293b;border-radius:4px;color:#334155">&mdash;</td>';
+          html += '<td style="width:' + BASE_W + 'px;height:' + BASE_H + 'px;' +
+            'background:#0f172a;text-align:center;border-radius:4px;border:1px solid #1e293b;color:#334155;vertical-align:middle">&mdash;</td>';
         }
       }
       html += '</tr>';
@@ -546,23 +595,23 @@ async function loadPanelSummary() {
     html += '</table>';
   });
 
-  // Unassigned panels: flat table
+  // Unassigned panels: flat table with bar fill
   if (unassigned.length) {
     html += '<h3 style="color:#94a3b8;margin:1rem 0 0.25rem">Unassigned Panels</h3>';
-    html += '<table><tr><th>Panel</th><th>Total kWh</th><th>Best Hour (W)</th><th>Points</th></tr>';
+    html += '<table><tr><th>Panel</th><th>Total kWh</th><th>Best Hour</th><th>Points</th></tr>';
     unassigned.sort(function(a, b) { return (sumLookup[b] ? sumLookup[b].total_kwh : 0) - (sumLookup[a] ? sumLookup[a].total_kwh : 0); });
     unassigned.forEach(function(lbl) {
       var r = sumLookup[lbl];
       if (!r) return;
       var pct = maxKwh > 0 ? r.total_kwh / maxKwh : 0;
       var barW = Math.round(pct * 100);
-      var color = summaryColor(pct);
+      var color = gradientColor(pct);
       html += '<tr>' +
         '<td style="color:#94a3b8;white-space:nowrap">' + lbl + '</td>' +
         '<td><div style="display:flex;align-items:center;gap:0.5rem">' +
           '<div style="background:' + color + '44;border-left:3px solid ' + color +
           ';height:1rem;width:' + barW + '%"></div>' +
-          '<span>' + r.total_kwh.toFixed(2) + '</span></div></td>' +
+          '<span>' + r.total_kwh.toFixed(2) + ' kWh</span></div></td>' +
         '<td>' + (r.best_hour_w || 0).toFixed(0) + ' W</td>' +
         '<td style="color:#64748b">(' + (r.data_points || 0).toLocaleString() + ')</td>' +
         '</tr>';
@@ -572,18 +621,18 @@ async function loadPanelSummary() {
 
   // If no slots at all, full flat table
   if (!arrayNames.length) {
-    html = '<table><tr><th>Panel</th><th>Total kWh</th><th>Best Hour (W)</th><th>Points</th></tr>';
+    html = '<table><tr><th>Panel</th><th>Total kWh</th><th>Best Hour</th><th>Points</th></tr>';
     data.sort(function(a, b) { return b.total_kwh - a.total_kwh; });
     data.forEach(function(r) {
       var pct = maxKwh > 0 ? r.total_kwh / maxKwh : 0;
       var barW = Math.round(pct * 100);
-      var color = summaryColor(pct);
+      var color = gradientColor(pct);
       html += '<tr>' +
         '<td style="color:#94a3b8;white-space:nowrap">' + r.label + '</td>' +
         '<td><div style="display:flex;align-items:center;gap:0.5rem">' +
           '<div style="background:' + color + '44;border-left:3px solid ' + color +
           ';height:1rem;width:' + barW + '%"></div>' +
-          '<span>' + r.total_kwh.toFixed(2) + '</span></div></td>' +
+          '<span>' + r.total_kwh.toFixed(2) + ' kWh</span></div></td>' +
         '<td>' + (r.best_hour_w || 0).toFixed(0) + ' W</td>' +
         '<td style="color:#64748b">(' + (r.data_points || 0).toLocaleString() + ')</td>' +
         '</tr>';
@@ -593,6 +642,158 @@ async function loadPanelSummary() {
 
   box.innerHTML = html;
 }
+
+// ---- Interactive time-slider array ----
+var sliderData = [];       // panel_wide rows for the chosen day
+var sliderSlots = [];      // cached slots
+var sliderTimestamps = []; // sorted unique timestamps
+
+async function loadSliderDayPicker() {
+  var sel = document.getElementById('sliderDayPick');
+  try {
+    var dates = await get('/api/panel_dates');
+    sel.innerHTML = '';
+    dates.forEach(function(d) {
+      var opt = document.createElement('option');
+      opt.value = d; opt.textContent = d;
+      sel.appendChild(opt);
+    });
+    // Select the most recent date
+    if (dates.length) sel.value = dates[dates.length - 1];
+  } catch(e) {
+    sel.innerHTML = '<option>No data</option>';
+  }
+}
+
+async function loadSliderDay() {
+  var dateVal = document.getElementById('sliderDayPick').value;
+  if (!dateVal) return;
+  var box = document.getElementById('sliderGridBox');
+  box.innerHTML = '<p class="loading">Loading panel data ...</p>';
+
+  var results = await Promise.all([get('/api/panel_wide?date=' + dateVal), get('/api/slots')]);
+  sliderData = results[0];
+  sliderSlots = results[1];
+
+  if (!sliderData.length) {
+    box.innerHTML = '<p class="loading">No panel data for ' + dateVal + '</p>';
+    document.getElementById('sliderControls').style.display = 'none';
+    return;
+  }
+
+  sliderTimestamps = sliderData.map(function(r) { return r.timestamp; });
+  var slider = document.getElementById('timeSlider');
+  slider.min = 0;
+  slider.max = sliderTimestamps.length - 1;
+  slider.value = 0;
+  document.getElementById('sliderControls').style.display = 'flex';
+
+  renderSliderGrid(0);
+}
+
+function renderSliderGrid(idx) {
+  var row = sliderData[idx];
+  var ts = row.timestamp;
+  document.getElementById('sliderTimeLabel').textContent = ts.slice(11, 16);
+
+  var slotInfo = buildSlotMap(sliderSlots);
+  var slotMap = slotInfo.map, arrayDims = slotInfo.arrays;
+
+  // Get all panel labels (columns except timestamp and total)
+  var allLabels = Object.keys(row).filter(function(k) { return k !== 'timestamp' && k !== 'total'; }).sort();
+
+  // Find max power across entire day for consistent scale
+  var dayMax = 0;
+  sliderData.forEach(function(r) {
+    allLabels.forEach(function(lbl) {
+      var v = r[lbl] || 0;
+      if (v > dayMax) dayMax = v;
+    });
+  });
+
+  var unassigned = allLabels.filter(function(l) { return !slotMap[l]; });
+  var arrayNames = Object.keys(arrayDims).sort();
+  var BASE_W = 90, BASE_H = 72;
+
+  var html = '<div style="font-size:0.75rem;color:#64748b;margin-bottom:0.5rem">System total: <strong style="color:#f59e0b">' +
+    (row.total || 0).toFixed(0) + ' W</strong></div>';
+
+  arrayNames.forEach(function(aName) {
+    var dim = arrayDims[aName];
+    html += '<h3 style="color:#94a3b8;margin:0.75rem 0 0.25rem">' + aName + '</h3>';
+    html += '<table style="border-collapse:separate;border-spacing:3px">';
+    for (var r = 1; r <= dim.maxRow; r++) {
+      html += '<tr>';
+      for (var c = 1; c <= dim.maxCol; c++) {
+        var cellLabel = null;
+        for (var lbl in slotMap) {
+          var s = slotMap[lbl];
+          if (s.array_name === aName && s.row === r && s.col === c) { cellLabel = lbl; break; }
+        }
+        if (cellLabel) {
+          var v = row[cellLabel] || 0;
+          var pct = dayMax > 0 ? v / dayMax : 0;
+          var color = gradientColor(pct);
+          var sz = panelCellSize(slotMap[cellLabel], BASE_W, BASE_H);
+          var barH = Math.round(pct * 100);
+          html += '<td style="position:relative;overflow:hidden;width:' + sz.width + 'px;height:' + sz.height + 'px;' +
+            'background:#1e293b;border-radius:4px;padding:0" ' +
+            'title="' + cellLabel + ' (' + slotMap[cellLabel].panel_name + ')\n' + v.toFixed(1) + ' W">' +
+            '<div style="position:absolute;bottom:0;left:0;right:0;height:' + barH + '%;' +
+            'background:' + color + '44;border-top:2px solid ' + color + ';transition:height 0.15s"></div>' +
+            '<div style="position:relative;z-index:1;text-align:center;padding:4px 2px;height:100%;' +
+            'display:flex;flex-direction:column;justify-content:center">' +
+            '<div style="font-size:0.6rem;color:#94a3b8">' + slotMap[cellLabel].panel_name + '</div>' +
+            '<div style="font-weight:700;font-size:0.85rem;color:#f8fafc">' + v.toFixed(0) + ' <span style="font-size:0.6rem;font-weight:400">W</span></div>' +
+            '</div></td>';
+        } else {
+          html += '<td style="width:' + BASE_W + 'px;height:' + BASE_H + 'px;' +
+            'background:#0f172a;text-align:center;border-radius:4px;border:1px solid #1e293b;color:#334155;vertical-align:middle">&mdash;</td>';
+        }
+      }
+      html += '</tr>';
+    }
+    html += '</table>';
+  });
+
+  // Unassigned panels
+  if (unassigned.length) {
+    html += '<h3 style="color:#94a3b8;margin:0.75rem 0 0.25rem">Unassigned Panels</h3>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+    unassigned.forEach(function(lbl) {
+      var v = row[lbl] || 0;
+      var pct = dayMax > 0 ? v / dayMax : 0;
+      var color = gradientColor(pct);
+      html += '<div style="background:#1e293b;border-left:3px solid ' + color +
+        ';padding:4px 8px;border-radius:4px;font-size:0.75rem">' +
+        '<span style="color:#94a3b8">' + lbl + '</span> ' +
+        '<strong style="color:#f8fafc">' + v.toFixed(0) + ' W</strong></div>';
+    });
+    html += '</div>';
+  }
+
+  // No slots: flat list
+  if (!arrayNames.length) {
+    html = '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+    allLabels.forEach(function(lbl) {
+      var v = row[lbl] || 0;
+      var pct = dayMax > 0 ? v / dayMax : 0;
+      var color = gradientColor(pct);
+      html += '<div style="background:#1e293b;border-left:3px solid ' + color +
+        ';padding:4px 8px;border-radius:4px;font-size:0.75rem">' +
+        '<span style="color:#94a3b8">' + lbl + '</span> ' +
+        '<strong style="color:#f8fafc">' + v.toFixed(0) + ' W</strong></div>';
+    });
+    html += '</div>';
+  }
+
+  document.getElementById('sliderGridBox').innerHTML = html;
+}
+
+// Wire up slider event
+document.getElementById('timeSlider').addEventListener('input', function() {
+  renderSliderGrid(parseInt(this.value));
+});
 
 // ---- Panel configuration editor ----
 var arrayCfgData = [];
@@ -904,7 +1105,8 @@ async function saveSlots() {
   try {
     await Promise.all([
       loadStatus(), loadDaily(), loadBilling(), loadFinance(),
-      loadPanelHeat(), loadPanelSummary(), loadPanelConfig()
+      loadPanelHeat(), loadPanelSummary(), loadPanelConfig(),
+      loadSliderDayPicker()
     ]);
 
     // Set date pickers to most recent day with panel data, fall back to today
