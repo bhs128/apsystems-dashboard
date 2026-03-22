@@ -79,7 +79,7 @@
     <button onclick="loadIntraday()">Load</button>
   </div>
   <div style="position:relative">
-    <div class="loading" id="intradayLoading" style="display:none">Loading ...</div>
+    <div class="loading" id="intradayLoading" style="display:none;position:absolute;inset:0;z-index:2;background:#1e293bee;align-items:center;justify-content:center">Loading ...</div>
     <canvas id="intradayChart"></canvas>
   </div>
 </div>
@@ -98,7 +98,7 @@
     <button onclick="loadPanelOverlay()">Load</button>
   </div>
   <div style="position:relative">
-    <div class="loading" id="panelOverlayLoading" style="display:none">Loading ...</div>
+    <div class="loading" id="panelOverlayLoading" style="display:none;position:absolute;inset:0;z-index:2;background:#1e293bee;align-items:center;justify-content:center">Loading ...</div>
     <canvas id="panelOverlayChart"></canvas>
   </div>
 </div>
@@ -258,7 +258,7 @@ var intradayChartObj = null;
 async function loadIntraday() {
   var dateVal = document.getElementById('intradayDate').value;
   if (!dateVal) return;
-  document.getElementById('intradayLoading').style.display = '';
+  document.getElementById('intradayLoading').style.display = 'flex';
   var data = await get('/api/system_readings?start=' + dateVal + '&end=' + dateVal);
   document.getElementById('intradayLoading').style.display = 'none';
   if (intradayChartObj) intradayChartObj.destroy();
@@ -311,7 +311,7 @@ var panelColors = [
 async function loadPanelOverlay() {
   var dateVal = document.getElementById('panelOverlayDate').value;
   if (!dateVal) return;
-  document.getElementById('panelOverlayLoading').style.display = '';
+  document.getElementById('panelOverlayLoading').style.display = 'flex';
   var data = await get('/api/panel_wide?date=' + dateVal);
   document.getElementById('panelOverlayLoading').style.display = 'none';
   if (panelOverlayObj) panelOverlayObj.destroy();
