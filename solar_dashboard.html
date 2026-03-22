@@ -729,6 +729,7 @@ function solarElevation(dateStr, localHour, lat, lon) {
 var sliderData = [];       // panel_wide rows for the chosen day
 var sliderSlots = [];      // cached slots
 var sliderTimestamps = []; // sorted unique timestamps
+var sliderTelemetry = {};  // { 'ts|uid': {dc_v1,dc_v2,ac_t} }
 
 async function loadSliderDayPicker() {
   var sel = document.getElementById('sliderDayPick');
@@ -756,9 +757,22 @@ async function loadSliderDay() {
   var box = document.getElementById('sliderGridBox');
   box.innerHTML = '<p class="loading">Loading panel data ...</p>';
 
-  var results = await Promise.all([get('/api/panel_wide?date=' + dateVal), get('/api/slots')]);
+  var results = await Promise.all([
+    get('/api/panel_wide?date=' + dateVal),
+    get('/api/slots'),
+    get('/api/inverter_telemetry?start=' + dateVal + '&end=' + dateVal)
+  ]);
   sliderData = results[0];
   sliderSlots = results[1];
+  var telRaw = results[2];
+
+  // Build telemetry lookup keyed by 'HH:MM|uid'
+  sliderTelemetry = {};
+  telRaw.forEach(function(t) {
+    var hm = (t.timestamp || '').slice(11, 16);
+    var key = hm + '|' + t.inverter_uid;
+    sliderTelemetry[key] = t;
+  });
 
   if (!sliderData.length) {
     box.innerHTML = '<p class="loading">No panel data for ' + dateVal + '</p>';
@@ -847,7 +861,7 @@ function renderSliderGrid(idx) {
 
   var unassigned = allLabels.filter(function(l) { return !slotMap[l]; });
   var arrayNames = Object.keys(arrayDims).sort();
-  var BASE_W = 90, BASE_H = 72;
+  var BASE_W = 120, BASE_H = 100;
 
   // System total gauge bar
   var sysTotal = row.total || 0;
@@ -885,9 +899,27 @@ function renderSliderGrid(idx) {
           var color = gradientColor(pct);
           var sz = panelCellSize(slotMap[cellLabel], BASE_W, BASE_H);
           var barH = Math.round(pct * 100);
+          // Look up telemetry for this inverter at current timestamp
+          var parts = cellLabel.split('-');
+          var ch = parseInt(parts.pop());
+          var uid = parts.join('-');
+          var hm = ts.slice(11, 16);
+          var tel = sliderTelemetry[hm + '|' + uid];
+          var voltVal = tel ? (ch === 1 ? tel.dc_v1 : tel.dc_v2) : null;
+          var tempVal = tel ? tel.ac_t : null;
+          var extraHtml = '';
+          if (voltVal != null || tempVal != null) {
+            extraHtml += '<div style="font-size:0.55rem;color:#94a3b8;margin-top:1px">';
+            if (voltVal != null) extraHtml += voltVal.toFixed(1) + ' V';
+            if (voltVal != null && tempVal != null) extraHtml += ' &middot; ';
+            if (tempVal != null) extraHtml += tempVal.toFixed(0) + '\u00b0C';
+            extraHtml += '</div>';
+          }
           html += '<td style="position:relative;overflow:hidden;width:' + sz.width + 'px;height:' + sz.height + 'px;' +
             'background:#0f172a;border-radius:4px;padding:0;border:1px solid #334155" ' +
-            'title="' + cellLabel + ' (' + slotMap[cellLabel].panel_name + ')\n' + v.toFixed(1) + ' W / ' + ceil.toFixed(0) + ' W (' + (pct * 100).toFixed(0) + '%)">' +
+            'title="' + cellLabel + ' (' + slotMap[cellLabel].panel_name + ')\n' + v.toFixed(1) + ' W / ' + ceil.toFixed(0) + ' W (' + (pct * 100).toFixed(0) + '%)' +
+            (voltVal != null ? '\nDC: ' + voltVal.toFixed(1) + ' V' : '') +
+            (tempVal != null ? '\nTemp: ' + tempVal.toFixed(0) + '\u00b0C' : '') + '">' +
             '<div style="position:absolute;bottom:0;left:0;right:0;height:' + barH + '%;' +
             'background:' + color + ';opacity:0.6;transition:height 0.15s"></div>' +
             '<div style="position:relative;z-index:1;text-align:center;padding:4px 2px;height:100%;' +
@@ -895,6 +927,7 @@ function renderSliderGrid(idx) {
             '<div style="font-size:0.6rem;color:#94a3b8">' + slotMap[cellLabel].panel_name + '</div>' +
             '<div style="font-weight:700;font-size:0.85rem;color:#f8fafc">' + v.toFixed(0) + ' <span style="font-size:0.6rem;font-weight:400">W</span></div>' +
             '<div style="font-size:0.5rem;color:#64748b">' + (pct * 100).toFixed(0) + '%</div>' +
+            extraHtml +
             '</div></td>';
         } else {
           html += '<td style="width:' + BASE_W + 'px;height:' + BASE_H + 'px;' +
