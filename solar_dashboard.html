@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solar Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #0f172a; color: #e2e8f0; padding: 1.5rem; }
+  h1 { font-size: 1.6rem; margin-bottom: 0.3rem; color: #f59e0b; }
+  .subtitle { color: #94a3b8; font-size: 0.85rem; margin-bottom: 1.5rem; }
+  .subtitle .live { color: #22c55e; }
+  .subtitle .err  { color: #ef4444; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+          gap: 1rem; margin-bottom: 1.5rem; }
+  .card { background: #1e293b; border-radius: 0.75rem; padding: 1rem; }
+  .card .label { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase;
+                 letter-spacing: 0.05em; }
+  .card .value { font-size: 1.5rem; font-weight: 700; color: #f8fafc; margin-top: 0.25rem; }
+  .card .detail { font-size: 0.7rem; color: #64748b; margin-top: 0.2rem; }
+  .chart-box { background: #1e293b; border-radius: 0.75rem; padding: 1rem;
+               margin-bottom: 1.5rem; }
+  .chart-box h2 { font-size: 1rem; color: #cbd5e1; margin-bottom: 0.75rem; }
+  .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media (max-width: 800px) { .chart-row { grid-template-columns: 1fr; } }
+  canvas { max-height: 280px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  th, td { padding: 0.4rem 0.6rem; text-align: left; border-bottom: 1px solid #334155; }
+  th { color: #94a3b8; font-weight: 600; }
+  .heatmap { overflow-x: auto; }
+  .heatmap table { font-size: 0.7rem; }
+  .heatmap td { text-align: center; padding: 0.25rem 0.4rem; border-radius: 0.25rem; }
+  .loading { color: #64748b; font-style: italic; padding: 2rem; text-align: center; }
+  .date-pick { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+  .date-pick label { font-size: 0.8rem; color: #94a3b8; }
+  .date-pick input { background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+                     padding: 0.3rem 0.5rem; border-radius: 0.4rem; font-size: 0.8rem; }
+  .date-pick button { background: #f59e0b; color: #0f172a; border: none; padding: 0.35rem 0.9rem;
+                      border-radius: 0.4rem; cursor: pointer; font-weight: 600; font-size: 0.8rem; }
+  .date-pick button:hover { background: #d97706; }
+  .panel-cfg { overflow-x: auto; }
+  .panel-cfg table { font-size: 0.75rem; }
+  .panel-cfg input, .panel-cfg select { background: #0f172a; border: 1px solid #334155;
+    color: #e2e8f0; padding: 0.2rem 0.35rem; border-radius: 0.3rem; font-size: 0.75rem;
+    width: 100%; min-width: 60px; }
+  .panel-cfg input:focus { border-color: #f59e0b; outline: none; }
+  .btn-save { background: #22c55e; color: #0f172a; border: none; padding: 0.4rem 1.2rem;
+              border-radius: 0.4rem; cursor: pointer; font-weight: 600; font-size: 0.8rem;
+              margin-top: 0.75rem; }
+  .btn-save:hover { background: #16a34a; }
+  .toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: #22c55e;
+           color: #0f172a; padding: 0.6rem 1.2rem; border-radius: 0.5rem;
+           font-weight: 600; font-size: 0.85rem; opacity: 0; transition: opacity 0.3s; z-index: 99; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<h1>&#9728; Solar Dashboard</h1>
+<p class="subtitle" id="statusLine">Connecting ...</p>
+
+<!-- Summary cards (DB + live EMA) -->
+<div class="grid" id="cards"><div class="loading">Loading ...</div></div>
+
+<!-- Intraday system power curve -->
+<div class="chart-box">
+  <h2>System Power Curve (W)</h2>
+  <div class="date-pick">
+    <label>Date:</label>
+    <input type="date" id="intradayDate">
+    <button onclick="loadIntraday()">Load</button>
+  </div>
+  <canvas id="intradayChart"></canvas>
+</div>
+
+<div class="chart-box">
+  <h2>Daily Production (kWh)</h2>
+  <canvas id="dailyChart"></canvas>
+</div>
+
+<!-- Per-panel intraday overlay -->
+<div class="chart-box">
+  <h2>Per-Panel Power Overlay (W)</h2>
+  <div class="date-pick">
+    <label>Date:</label>
+    <input type="date" id="panelOverlayDate">
+    <button onclick="loadPanelOverlay()">Load</button>
+  </div>
+  <canvas id="panelOverlayChart"></canvas>
+</div>
+
+<div class="chart-row">
+  <div class="chart-box">
+    <h2>Monthly Electric Bill ($)</h2>
+    <canvas id="billChart"></canvas>
+  </div>
+  <div class="chart-box">
+    <h2>HELOC Balance ($)</h2>
+    <canvas id="financeChart"></canvas>
+  </div>
+</div>
+
+<div class="chart-box">
+  <h2>Per-Panel Daily kWh &mdash; Last 7 Days</h2>
+  <div class="heatmap" id="heatmapBox"><div class="loading">Loading ...</div></div>
+  <h2 style="margin-top:1rem">Per-Panel Summary</h2>
+  <div id="panelSummaryBox"><div class="loading">Loading ...</div></div>
+</div>
+
+<!-- Panel configuration editor -->
+<div class="chart-box">
+  <h2>Panel Configuration</h2>
+  <p style="font-size:0.75rem;color:#64748b;margin-bottom:0.75rem">
+    Assign arrays, positions, angles, and specs to each panel. Changes are saved to the database.
+  </p>
+  <div class="panel-cfg" id="panelCfgBox"><div class="loading">Loading ...</div></div>
+</div>
+
+<div class="chart-box">
+  <h2>Sync Log</h2>
+  <div id="syncLog"><div class="loading">Loading ...</div></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const API = (params.get('api') || '').replace(/\/$/, '');
+
+async function get(path) {
+  var resp = await fetch(API + path);
+  if (!resp.ok) throw new Error(resp.status + ' ' + resp.statusText);
+  return resp.json();
+}
+
+async function put(path, body) {
+  var resp = await fetch(API + path, {
+    method: 'PUT', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  });
+  if (!resp.ok) throw new Error(resp.status + ' ' + resp.statusText);
+  return resp.json();
+}
+
+function toast(msg, ok) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.background = ok ? '#22c55e' : '#ef4444';
+  el.classList.add('show');
+  setTimeout(function() { el.classList.remove('show'); }, 2500);
+}
+
+var chartOpts = {
+  responsive: true,
+  plugins: { legend: { display: false } },
+  scales: {
+    x: { ticks: { color: '#64748b', maxTicksLimit: 12 }, grid: { color: '#1e293b' } },
+    y: { ticks: { color: '#64748b' }, grid: { color: '#334155' } }
+  }
+};
+
+function card(label, value, detail) {
+  return '<div class="card"><div class="label">' + label + '</div>' +
+         '<div class="value">' + value + '</div>' +
+         '<div class="detail">' + detail + '</div></div>';
+}
+function fmt(n) { return n != null ? Number(n).toLocaleString() : '\u2014'; }
+function short(s) { return s ? s.slice(0, 10) : '\u2014'; }
+
+// ---- Status cards + live EMA summary ----
+async function loadStatus() {
+  var s = await get('/api/status');
+  document.getElementById('statusLine').innerHTML =
+    'solar.db \u2014 ' + s.db_size_mb + ' MB \u2014 <span class="live">\u25cf live</span>';
+
+  var t = s.tables;
+  var cardsHtml = [
+    card('System Readings', fmt(t.system_readings.count),
+         (t.system_readings.unique_dates || 0) + ' days &middot; ' +
+         short(t.system_readings.min) + ' &rarr; ' + short(t.system_readings.max)),
+    card('Daily Energy', fmt(t.daily_energy.count),
+         short(t.daily_energy.min) + ' &rarr; ' + short(t.daily_energy.max)),
+    card('Panel Readings', fmt(t.panel_readings.count),
+         (t.panel_readings.unique_dates || 0) + ' days &middot; ' +
+         short(t.panel_readings.min) + ' &rarr; ' + short(t.panel_readings.max)),
+    card('Inverters', t.inverters.count, 'registered UIDs'),
+    card('Billing Periods', t.billing_periods.count,
+         short(t.billing_periods.min) + ' &rarr; ' + short(t.billing_periods.max)),
+    card('Finance Records', t.finance.count,
+         short(t.finance.min) + ' &rarr; ' + short(t.finance.max)),
+  ];
+
+  // Try live EMA summary (may fail if API keys not on this machine)
+  try {
+    var ema = await get('/api/system_summary');
+    if (ema && !ema.error) {
+      cardsHtml.unshift(
+        card('Today', (ema.today || 0) + ' kWh', 'live from EMA'),
+        card('This Month', (ema.month || 0) + ' kWh', 'live from EMA'),
+        card('This Year', (ema.year || 0) + ' kWh', 'live from EMA'),
+        card('Lifetime', (ema.lifetime || 0) + ' kWh', 'live from EMA')
+      );
+    }
+  } catch(e) { /* EMA summary unavailable — no problem */ }
+
+  document.getElementById('cards').innerHTML = cardsHtml.join('');
+
+  if (s.sync_log.length) {
+    var tbl = '<table><tr><th>Source</th><th>Last Date</th><th>Synced At</th><th>Records</th></tr>';
+    s.sync_log.forEach(function(r) {
+      tbl += '<tr><td>' + r.source + '</td><td>' + r.last_date + '</td>' +
+             '<td>' + (r.synced_at || '').slice(0,19) + '</td>' +
+             '<td>' + fmt(r.record_count) + '</td></tr>';
+    });
+    tbl += '</table>';
+    document.getElementById('syncLog').innerHTML = tbl;
+  }
+}
+
+// ---- Intraday system power curve ----
+var intradayChartObj = null;
+async function loadIntraday() {
+  var dateVal = document.getElementById('intradayDate').value;
+  if (!dateVal) return;
+  var data = await get('/api/system_readings?start=' + dateVal + '&end=' + dateVal);
+  if (intradayChartObj) intradayChartObj.destroy();
+  if (!data.length) {
+    intradayChartObj = null;
+    toast('No system readings for ' + dateVal, false);
+    return;
+  }
+  intradayChartObj = new Chart(document.getElementById('intradayChart'), {
+    type: 'line',
+    data: {
+      labels: data.map(function(r) { return r.timestamp.slice(11, 16); }),
+      datasets: [{
+        data: data.map(function(r) { return r.power_w; }),
+        borderColor: '#f59e0b', borderWidth: 2,
+        fill: true, backgroundColor: '#f59e0b22', pointRadius: 0, tension: 0.3
+      }]
+    },
+    options: Object.assign({}, chartOpts, {
+      scales: Object.assign({}, chartOpts.scales, {
+        y: { ticks: { color: '#64748b' }, grid: { color: '#334155' },
+             title: { display: true, text: 'Watts', color: '#64748b' } }
+      })
+    })
+  });
+}
+
+// ---- Daily production ----
+async function loadDaily() {
+  var data = await get('/api/daily_energy');
+  new Chart(document.getElementById('dailyChart'), {
+    type: 'bar',
+    data: {
+      labels: data.map(function(r) { return r.date; }),
+      datasets: [{ data: data.map(function(r) { return r.energy_kwh; }),
+                    backgroundColor: '#f59e0b88', borderColor: '#f59e0b', borderWidth: 1 }]
+    },
+    options: chartOpts
+  });
+}
+
+// ---- Per-panel power overlay ----
+var panelOverlayObj = null;
+var panelColors = [
+  '#f59e0b','#22c55e','#3b82f6','#ef4444','#a855f7','#ec4899',
+  '#14b8a6','#f97316','#06b6d4','#84cc16','#e879f9','#fbbf24',
+  '#34d399','#60a5fa','#f87171','#c084fc','#fb7185','#2dd4bf',
+  '#fb923c','#22d3ee'
+];
+async function loadPanelOverlay() {
+  var dateVal = document.getElementById('panelOverlayDate').value;
+  if (!dateVal) return;
+  var data = await get('/api/panel_wide?date=' + dateVal);
+  if (panelOverlayObj) panelOverlayObj.destroy();
+  if (!data.length) {
+    panelOverlayObj = null;
+    toast('No panel data for ' + dateVal, false);
+    return;
+  }
+  var cols = Object.keys(data[0]).filter(function(k) { return k !== 'timestamp' && k !== 'total'; });
+  cols.sort();
+  var datasets = cols.map(function(col, i) {
+    return {
+      label: col,
+      data: data.map(function(r) { return r[col] || 0; }),
+      borderColor: panelColors[i % panelColors.length],
+      borderWidth: 1.5,
+      pointRadius: 0,
+      tension: 0.3,
+      fill: false
+    };
+  });
+  panelOverlayObj = new Chart(document.getElementById('panelOverlayChart'), {
+    type: 'line',
+    data: {
+      labels: data.map(function(r) { return r.timestamp.slice(11, 16); }),
+      datasets: datasets
+    },
+    options: Object.assign({}, chartOpts, {
+      plugins: { legend: { display: true, position: 'bottom',
+                 labels: { color: '#94a3b8', boxWidth: 12, font: { size: 10 } } } },
+      scales: Object.assign({}, chartOpts.scales, {
+        y: { ticks: { color: '#64748b' }, grid: { color: '#334155' },
+             title: { display: true, text: 'Watts', color: '#64748b' } }
+      })
+    })
+  });
+}
+
+// ---- Billing ----
+async function loadBilling() {
+  var data = await get('/api/billing');
+  new Chart(document.getElementById('billChart'), {
+    type: 'bar',
+    data: {
+      labels: data.map(function(r) { return r.meter_date.slice(0, 10); }),
+      datasets: [
+        { label: 'Actual', data: data.map(function(r) { return r.actual_bill; }),
+          backgroundColor: '#22c55e88' },
+        { label: 'Est. w/o Solar', data: data.map(function(r) { return r.est_bill_without_solar; }),
+          backgroundColor: '#ef444488' }
+      ]
+    },
+    options: Object.assign({}, chartOpts,
+      { plugins: { legend: { display: true, labels: { color: '#94a3b8' } } } })
+  });
+}
+
+// ---- Finance ----
+async function loadFinance() {
+  var data = await get('/api/finance');
+  new Chart(document.getElementById('financeChart'), {
+    type: 'line',
+    data: {
+      labels: data.map(function(r) { return r.date; }),
+      datasets: [{ data: data.map(function(r) { return r.heloc_balance; }),
+                    borderColor: '#3b82f6', borderWidth: 2,
+                    fill: true, backgroundColor: '#3b82f622', pointRadius: 3, tension: 0.3 }]
+    },
+    options: chartOpts
+  });
+}
+
+// ---- Panel heatmap ----
+async function loadPanelHeat() {
+  var data = await get('/api/panel_daily');
+  var box = document.getElementById('heatmapBox');
+  if (!data.length) { box.innerHTML = '<p class="loading">No panel data</p>'; return; }
+  var dateSet = {}, labelSet = {};
+  data.forEach(function(r) { dateSet[r.date] = 1; labelSet[r.label] = 1; });
+  var allDates = Object.keys(dateSet).sort();
+  var dates = allDates.slice(-7);
+  var labels = Object.keys(labelSet).sort();
+  var lookup = {};
+  data.forEach(function(r) { lookup[r.date + '|' + r.label] = r.kwh; });
+  var maxV = 0;
+  labels.forEach(function(lbl) {
+    dates.forEach(function(d) {
+      var v = lookup[d + '|' + lbl] || 0;
+      if (v > maxV) maxV = v;
+    });
+  });
+  var html = '<table><tr><th></th>';
+  dates.forEach(function(d) { html += '<th>' + d.slice(5) + '</th>'; });
+  html += '</tr>';
+  labels.forEach(function(lbl) {
+    html += '<tr><td style="color:#94a3b8;white-space:nowrap">' + lbl + '</td>';
+    dates.forEach(function(d) {
+      var v = lookup[d + '|' + lbl] || 0;
+      var pct = maxV > 0 ? v / maxV : 0;
+      var r = Math.round(15 + 240 * (1 - pct));
+      var g = Math.round(15 + 150 * pct);
+      html += '<td style="background:rgb(' + r + ',' + g + ',15);color:#f8fafc">' +
+              v.toFixed(2) + '</td>';
+    });
+    html += '</tr>';
+  });
+  html += '</table>';
+  box.innerHTML = html;
+}
+
+// ---- Panel summary ----
+async function loadPanelSummary() {
+  var data = await get('/api/panel_summary');
+  var box = document.getElementById('panelSummaryBox');
+  if (!data.length) { box.innerHTML = '<p class="loading">No panel data</p>'; return; }
+  var maxKwh = Math.max.apply(null, data.map(function(r) { return r.total_kwh; }));
+  var html = '<table><tr><th>Panel</th><th>Total kWh</th><th>Best Hour (W)</th><th>Points</th></tr>';
+  data.sort(function(a, b) { return b.total_kwh - a.total_kwh; });
+  data.forEach(function(r) {
+    var pct = maxKwh > 0 ? r.total_kwh / maxKwh : 0;
+    var barW = Math.round(pct * 100);
+    var color = pct > 0.9 ? '#22c55e' : pct > 0.75 ? '#f59e0b' : '#ef4444';
+    html += '<tr>' +
+      '<td style="color:#94a3b8;white-space:nowrap">' + r.label + '</td>' +
+      '<td><div style="display:flex;align-items:center;gap:0.5rem">' +
+        '<div style="background:' + color + '44;border-left:3px solid ' + color +
+        ';height:1rem;width:' + barW + '%"></div>' +
+        '<span>' + r.total_kwh.toFixed(2) + '</span></div></td>' +
+      '<td>' + (r.best_hour_w || 0).toFixed(0) + ' W</td>' +
+      '<td style="color:#64748b">(' + (r.data_points || 0).toLocaleString() + ')</td>' +
+      '</tr>';
+  });
+  html += '</table>';
+  box.innerHTML = html;
+}
+
+// ---- Panel configuration editor ----
+var panelCfgData = [];
+async function loadPanelConfig() {
+  var panels = await get('/api/panels');
+  var inverters = await get('/api/inverters');
+  var box = document.getElementById('panelCfgBox');
+
+  // Build panel list from inverters (each has 2 channels)
+  // Merge in any existing config
+  var cfgMap = {};
+  panels.forEach(function(p) { cfgMap[p.inverter_uid + '-' + p.channel] = p; });
+
+  panelCfgData = [];
+  inverters.forEach(function(inv) {
+    if (!inv.is_active) return;
+    [1, 2].forEach(function(ch) {
+      var key = inv.uid + '-' + ch;
+      var existing = cfgMap[key] || {};
+      panelCfgData.push({
+        inverter_uid: inv.uid,
+        channel: ch,
+        panel_name: existing.panel_name || '',
+        array_name: existing.array_name || '',
+        array_row: existing.array_row != null ? existing.array_row : '',
+        array_col: existing.array_col != null ? existing.array_col : '',
+        tilt_deg: existing.tilt_deg != null ? existing.tilt_deg : '',
+        azimuth_deg: existing.azimuth_deg != null ? existing.azimuth_deg : '',
+        model: existing.model || '',
+        capacity_w: existing.capacity_w != null ? existing.capacity_w : '',
+        width_mm: existing.width_mm != null ? existing.width_mm : '',
+        height_mm: existing.height_mm != null ? existing.height_mm : '',
+        install_date: existing.install_date || '',
+        notes: existing.notes || ''
+      });
+    });
+  });
+
+  var fields = [
+    {key:'panel_name', label:'Name', type:'text', w:'70px'},
+    {key:'array_name', label:'Array', type:'text', w:'90px'},
+    {key:'array_row', label:'Row', type:'number', w:'45px'},
+    {key:'array_col', label:'Col', type:'number', w:'45px'},
+    {key:'tilt_deg', label:'Tilt°', type:'number', w:'55px'},
+    {key:'azimuth_deg', label:'Azimuth°', type:'number', w:'65px'},
+    {key:'model', label:'Model', type:'text', w:'140px'},
+    {key:'capacity_w', label:'Watts', type:'number', w:'60px'},
+    {key:'width_mm', label:'W mm', type:'number', w:'60px'},
+    {key:'height_mm', label:'H mm', type:'number', w:'60px'},
+    {key:'install_date', label:'Installed', type:'date', w:'110px'},
+    {key:'notes', label:'Notes', type:'text', w:'120px'}
+  ];
+
+  var html = '<table><tr><th style="white-space:nowrap">Inverter-Ch</th>';
+  fields.forEach(function(f) {
+    html += '<th style="white-space:nowrap">' + f.label + '</th>';
+  });
+  html += '</tr>';
+
+  panelCfgData.forEach(function(p, idx) {
+    var shortUid = p.inverter_uid.slice(-6);
+    html += '<tr><td style="color:#94a3b8;white-space:nowrap;font-family:monospace">' +
+            shortUid + '-' + p.channel + '</td>';
+    fields.forEach(function(f) {
+      var val = p[f.key] != null ? p[f.key] : '';
+      html += '<td><input type="' + f.type + '" data-idx="' + idx + '" data-field="' + f.key +
+              '" value="' + String(val).replace(/"/g, '&quot;') +
+              '" style="min-width:' + f.w + '"></td>';
+    });
+    html += '</tr>';
+  });
+  html += '</table>';
+  html += '<button class="btn-save" onclick="savePanelConfig()">Save Panel Configuration</button>';
+  box.innerHTML = html;
+
+  // Attach live edit handlers
+  box.querySelectorAll('input').forEach(function(inp) {
+    inp.addEventListener('change', function() {
+      var idx = parseInt(this.dataset.idx);
+      var field = this.dataset.field;
+      panelCfgData[idx][field] = this.value;
+    });
+  });
+}
+
+async function savePanelConfig() {
+  var payload = panelCfgData.map(function(p) {
+    var row = { inverter_uid: p.inverter_uid, channel: p.channel };
+    if (p.panel_name) row.panel_name = p.panel_name;
+    if (p.array_name) row.array_name = p.array_name;
+    if (p.array_row !== '') row.array_row = Number(p.array_row);
+    if (p.array_col !== '') row.array_col = Number(p.array_col);
+    if (p.tilt_deg !== '') row.tilt_deg = Number(p.tilt_deg);
+    if (p.azimuth_deg !== '') row.azimuth_deg = Number(p.azimuth_deg);
+    if (p.model) row.model = p.model;
+    if (p.capacity_w !== '') row.capacity_w = Number(p.capacity_w);
+    if (p.width_mm !== '') row.width_mm = Number(p.width_mm);
+    if (p.height_mm !== '') row.height_mm = Number(p.height_mm);
+    if (p.install_date) row.install_date = p.install_date;
+    if (p.notes) row.notes = p.notes;
+    return row;
+  });
+  try {
+    var resp = await put('/api/panels', payload);
+    toast('Saved ' + resp.updated + ' panels', true);
+  } catch(e) {
+    toast('Error: ' + e.message, false);
+  }
+}
+
+// ---- Init ----
+(async function() {
+  // Set date pickers to most recent date with data
+  var today = new Date().toISOString().slice(0, 10);
+  document.getElementById('intradayDate').value = today;
+  document.getElementById('panelOverlayDate').value = today;
+
+  try {
+    await Promise.all([
+      loadStatus(), loadDaily(), loadBilling(), loadFinance(),
+      loadPanelHeat(), loadPanelSummary(), loadPanelConfig()
+    ]);
+    // Auto-load today's intraday if we have data
+    loadIntraday();
+  } catch (err) {
+    document.getElementById('statusLine').innerHTML =
+      '<span class="err">\u25cf Error: ' + err.message +
+      '</span> \u2014 is solar_api.py running?';
+  }
+})();
+</script>
+</body>
+</html>

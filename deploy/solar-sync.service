@@ -1,0 +1,31 @@
+# solar-sync.service — systemd unit for the daily Solar data sync
+#
+# This is a oneshot service triggered by solar-sync.timer.
+#
+# Install:
+#   sudo cp deploy/solar-sync.service deploy/solar-sync.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now solar-sync.timer
+#
+# Manual run:
+#   sudo systemctl start solar-sync
+#
+# Logs:
+#   journalctl -u solar-sync
+
+[Unit]
+Description=Solar data sync (API pull)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__INSTALL_DIR__
+ExecStart=/usr/bin/python3 __INSTALL_DIR__/solar_sync.py --sync
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-__INSTALL_DIR__/.env
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

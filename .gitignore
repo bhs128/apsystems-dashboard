@@ -1,0 +1,22 @@
+# Data and secrets
+*.db
+*.db-shm
+*.db-wal
+.env
+.ema_credentials
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Local data files (not part of the project)
+daily_prod_curves/
+panel_data/
+*.xls
+*.csv
+!requirements.txt
+
+# OS
+.DS_Store
+Thumbs.db

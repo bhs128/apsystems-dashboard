@@ -1,0 +1,20 @@
+# solar-sync.timer — run solar data sync daily at 10pm
+#
+# Install:
+#   sudo cp deploy/solar-sync.service deploy/solar-sync.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now solar-sync.timer
+#
+# Check schedule:
+#   systemctl list-timers solar-sync.timer
+
+[Unit]
+Description=Daily solar data sync
+
+[Timer]
+OnCalendar=*-*-* 22:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
