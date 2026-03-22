@@ -89,19 +89,7 @@
   <canvas id="dailyChart"></canvas>
 </div>
 
-<!-- Per-panel intraday overlay -->
-<div class="chart-box">
-  <h2>Per-Panel Power Overlay (W)</h2>
-  <div class="date-pick">
-    <label>Date:</label>
-    <input type="date" id="panelOverlayDate">
-    <button onclick="loadPanelOverlay()">Load</button>
-  </div>
-  <div style="position:relative;min-height:120px">
-    <div class="loading" id="panelOverlayLoading" style="display:flex;position:absolute;inset:0;z-index:2;background:#1e293b;align-items:center;justify-content:center">Loading ...</div>
-    <canvas id="panelOverlayChart"></canvas>
-  </div>
-</div>
+
 
 <div class="chart-row">
   <div class="chart-box">
@@ -114,9 +102,9 @@
   </div>
 </div>
 
-<div class="chart-row">
-<div class="chart-box">
-  <h2>Interactive Array View</h2>
+<!-- Shared day picker for Interactive Array + Per-Panel Overlay -->
+<div class="chart-box" style="padding-bottom:0.5rem">
+  <h2>Panel Intraday View</h2>
   <p class="section-label">Drag the slider to see each panel&rsquo;s instantaneous power output through the day</p>
   <div class="slider-wrap">
     <label>Day:</label>
@@ -127,7 +115,18 @@
     <input type="range" id="timeSlider" min="0" max="0" value="0">
     <span class="slider-time" id="sliderTimeLabel">--:--</span>
   </div>
+</div>
+<div class="chart-row">
+<div class="chart-box">
+  <h3 style="color:#94a3b8;margin:0 0 0.25rem">Interactive Array View</h3>
   <div id="sliderGridBox"></div>
+</div>
+<div class="chart-box">
+  <h3 style="color:#94a3b8;margin:0 0 0.25rem">Per-Panel Power Overlay (W)</h3>
+  <div style="position:relative;min-height:120px">
+    <div class="loading" id="panelOverlayLoading" style="display:flex;position:absolute;inset:0;z-index:2;background:#1e293b;align-items:center;justify-content:center">Loading ...</div>
+    <canvas id="panelOverlayChart"></canvas>
+  </div>
 </div>
 </div>
 
@@ -310,8 +309,31 @@ var panelColors = [
   '#34d399','#60a5fa','#f87171','#c084fc','#fb7185','#2dd4bf',
   '#fb923c','#22d3ee'
 ];
-async function loadPanelOverlay() {
-  var dateVal = document.getElementById('panelOverlayDate').value;
+// Vertical line plugin for slider position
+var sliderLineIndex = 0;
+var sliderLinePlugin = {
+  id: 'sliderLine',
+  afterDraw: function(chart) {
+    if (sliderLineIndex < 0 || !chart.data.labels.length) return;
+    var meta = chart.getDatasetMeta(0);
+    if (!meta || !meta.data || !meta.data[sliderLineIndex]) return;
+    var x = meta.data[sliderLineIndex].x;
+    var ctx = chart.ctx;
+    var yAxis = chart.scales.y;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x, yAxis.top);
+    ctx.lineTo(x, yAxis.bottom);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#f59e0b';
+    ctx.setLineDash([4, 3]);
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+
+async function loadPanelOverlay(dateVal) {
+  if (!dateVal) dateVal = document.getElementById('sliderDayPick').value;
   if (!dateVal) return;
   document.getElementById('panelOverlayLoading').style.display = 'flex';
   var data = await get('/api/panel_wide?date=' + dateVal);
@@ -348,8 +370,16 @@ async function loadPanelOverlay() {
         y: { ticks: { color: '#64748b' }, grid: { color: '#334155' },
              title: { display: true, text: 'Watts', color: '#64748b' } }
       })
-    })
+    }),
+    plugins: [sliderLinePlugin]
   });
+  updateOverlayLine();
+}
+
+function updateOverlayLine() {
+  if (!panelOverlayObj) return;
+  sliderLineIndex = parseInt(document.getElementById('timeSlider').value) || 0;
+  panelOverlayObj.draw();
 }
 
 // ---- Billing ----
@@ -705,6 +735,7 @@ async function loadSliderDay() {
   document.getElementById('sliderControls').style.display = 'flex';
 
   renderSliderGrid(0);
+  loadPanelOverlay(dateVal);
 }
 
 function renderSliderGrid(idx) {
@@ -829,7 +860,9 @@ function renderSliderGrid(idx) {
 
 // Wire up slider event
 document.getElementById('timeSlider').addEventListener('input', function() {
-  renderSliderGrid(parseInt(this.value));
+  var idx = parseInt(this.value);
+  renderSliderGrid(idx);
+  updateOverlayLine();
 });
 
 // ---- Panel configuration editor ----
@@ -1153,10 +1186,8 @@ async function saveSlots() {
     var daily = await get('/api/daily_energy');
     var latest = daily.length ? daily[daily.length - 1].date : new Date().toISOString().slice(0, 10);
     document.getElementById('intradayDate').value = latest;
-    document.getElementById('panelOverlayDate').value = latest;
 
     loadIntraday();
-    loadPanelOverlay();
 
     // Auto-load slider with most recent day
     if (document.getElementById('sliderDayPick').value) {
