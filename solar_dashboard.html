@@ -342,7 +342,12 @@ async function loadPanelOverlay(dateVal) {
   if (!dateVal) dateVal = document.getElementById('sliderDayPick').value;
   if (!dateVal) return;
   document.getElementById('panelOverlayLoading').style.display = 'flex';
-  var data = await get('/api/panel_wide?date=' + dateVal);
+  var results = await Promise.all([
+    get('/api/panel_wide?date=' + dateVal),
+    get('/api/arrays')
+  ]);
+  var data = results[0];
+  var arrays = results[1];
   document.getElementById('panelOverlayLoading').style.display = 'none';
   if (panelOverlayObj) panelOverlayObj.destroy();
   if (!data.length) {
@@ -363,6 +368,31 @@ async function loadPanelOverlay(dateVal) {
       fill: false
     };
   });
+
+  // Ideal clear-sky curve (no inverter cap)
+  var LAT = 43.09, LON = -88.33;
+  var tilt = 39.8, panelAz = 180, panelW = 410; // defaults
+  if (arrays && arrays.length) {
+    var a = arrays[0]; // use first array's orientation
+    if (a.tilt_deg != null) tilt = a.tilt_deg;
+    if (a.azimuth_deg != null) panelAz = a.azimuth_deg;
+  }
+  var idealData = data.map(function(r) {
+    var hm = r.timestamp.slice(11, 16).split(':');
+    var h = parseInt(hm[0]) + parseInt(hm[1]) / 60;
+    return Math.round(clearSkyPanelPower(dateVal, h, LAT, LON, tilt, panelAz, panelW));
+  });
+  datasets.push({
+    label: 'Ideal 410W (clear sky)',
+    data: idealData,
+    borderColor: '#ffffff',
+    borderWidth: 2,
+    borderDash: [6, 3],
+    pointRadius: 0,
+    tension: 0.3,
+    fill: false
+  });
+
   panelOverlayObj = new Chart(document.getElementById('panelOverlayChart'), {
     type: 'line',
     data: {
@@ -692,37 +722,67 @@ async function loadPanelSummary() {
   box.innerHTML = html;
 }
 
-// ---- Solar elevation (simplified solar position) ----
-function solarElevation(dateStr, localHour, lat, lon) {
-  // dateStr: 'YYYY-MM-DD', localHour: decimal hours (local time), lat/lon degrees
-  // Determine UTC offset: US Central = UTC-6 (CST) or UTC-5 (CDT)
+// ---- Solar position (simplified) ----
+function solarPosition(dateStr, localHour, lat, lon) {
+  // Returns { elevation (deg), azimuth (deg, 0=N clockwise) }
   var parts = dateStr.split('-');
   var y = parseInt(parts[0]), m = parseInt(parts[1]), d = parseInt(parts[2]);
-  // Approximate DST (second Sunday in March to first Sunday in November)
-  var dstStart = new Date(y, 2, 8); // March 8 at earliest
+  var dstStart = new Date(y, 2, 8);
   dstStart.setDate(8 + (7 - dstStart.getDay()) % 7);
-  var dstEnd = new Date(y, 10, 1); // Nov 1 at earliest
+  var dstEnd = new Date(y, 10, 1);
   dstEnd.setDate(1 + (7 - dstEnd.getDay()) % 7);
   var dt = new Date(y, m - 1, d);
   var utcOffset = (dt >= dstStart && dt < dstEnd) ? -5 : -6;
   var utcHour = localHour - utcOffset;
-  // Day of year
   var start = new Date(y, 0, 1);
   var doy = Math.floor((dt - start) / 86400000) + 1;
-  // Solar declination (Spencer, 1971)
   var B = (doy - 1) * 2 * Math.PI / 365;
   var decl = 0.006918 - 0.399912 * Math.cos(B) + 0.070257 * Math.sin(B)
            - 0.006758 * Math.cos(2*B) + 0.000907 * Math.sin(2*B)
            - 0.002697 * Math.cos(3*B) + 0.00148 * Math.sin(3*B);
-  // Equation of time (minutes)
   var eot = 229.18 * (0.000075 + 0.001868 * Math.cos(B) - 0.032077 * Math.sin(B)
            - 0.014615 * Math.cos(2*B) - 0.04089 * Math.sin(2*B));
-  // Solar time
   var solarTime = utcHour + (eot / 60) + (lon / 15);
-  var ha = (solarTime - 12) * 15 * Math.PI / 180; // hour angle
+  var ha = (solarTime - 12) * 15 * Math.PI / 180;
   var latRad = lat * Math.PI / 180;
   var sinElev = Math.sin(latRad) * Math.sin(decl) + Math.cos(latRad) * Math.cos(decl) * Math.cos(ha);
-  return Math.asin(sinElev) * 180 / Math.PI;
+  var elev = Math.asin(sinElev);
+  // Solar azimuth (0=N, clockwise)
+  var cosAz = (Math.sin(decl) - Math.sin(elev) * Math.sin(latRad)) / (Math.cos(elev) * Math.cos(latRad));
+  cosAz = Math.max(-1, Math.min(1, cosAz));
+  var az = Math.acos(cosAz);
+  if (ha > 0) az = 2 * Math.PI - az; // afternoon → azimuth > 180
+  return { elevation: elev * 180 / Math.PI, azimuth: az * 180 / Math.PI };
+}
+
+function solarElevation(dateStr, localHour, lat, lon) {
+  return solarPosition(dateStr, localHour, lat, lon).elevation;
+}
+
+// Clear-sky power for a tilted panel (W) — no inverter clipping
+function clearSkyPanelPower(dateStr, localHour, lat, lon, tiltDeg, azDeg, capacityW) {
+  var sun = solarPosition(dateStr, localHour, lat, lon);
+  if (sun.elevation <= 0) return 0;
+  var elevR = sun.elevation * Math.PI / 180;
+  var azR = sun.azimuth * Math.PI / 180;
+  var tiltR = tiltDeg * Math.PI / 180;
+  var panelAzR = azDeg * Math.PI / 180;
+  // Air mass (Kasten & Young, 1989 simplified)
+  var am = 1 / (Math.sin(elevR) + 0.50572 * Math.pow(sun.elevation + 6.07995, -1.6364));
+  // Clear-sky DNI (Meinel model)
+  var dni = 1361 * Math.pow(0.7, Math.pow(am, 0.678));
+  // Angle of incidence on tilted surface
+  var cosAOI = Math.sin(elevR) * Math.cos(tiltR) +
+               Math.cos(elevR) * Math.sin(tiltR) * Math.cos(azR - panelAzR);
+  if (cosAOI < 0) cosAOI = 0;
+  var beam = dni * cosAOI;
+  // Simple isotropic diffuse (Liu & Jordan)
+  var dhi = 120 * Math.sin(elevR); // rough clear-sky diffuse
+  var diffuse = dhi * (1 + Math.cos(tiltR)) / 2;
+  // Total POA irradiance
+  var poa = beam + diffuse;
+  // Scale by panel STC rating (STC = 1000 W/m²)
+  return poa / 1000 * capacityW;
 }
 
 // ---- Interactive time-slider array ----
