@@ -386,7 +386,7 @@ async function loadFinance() {
 
 // ---- Shared: build slot→position map ----
 function buildSlotMap(slots) {
-  // Returns { label → {array_name, row, col, panel_name, w_mm, h_mm}, ... }
+  // Returns { label → {array_name, row, col, panel_name, w_mm, h_mm, inv_max_w}, ... }
   // and { array_name → {maxRow, maxCol} }
   var map = {}, arrays = {};
   slots.forEach(function(s) {
@@ -394,7 +394,8 @@ function buildSlotMap(slots) {
     var label = s.inverter_uid + '-' + s.inverter_channel;
     map[label] = { array_name: s.array_name, row: s.row, col: s.col,
                    panel_name: s.panel_name || label,
-                   w_mm: s.panel_width_mm || 0, h_mm: s.panel_height_mm || 0 };
+                   w_mm: s.panel_width_mm || 0, h_mm: s.panel_height_mm || 0,
+                   inv_max_w: s.inverter_max_w || 0 };
     if (!arrays[s.array_name]) arrays[s.array_name] = { maxRow: 0, maxCol: 0 };
     if (s.row > arrays[s.array_name].maxRow) arrays[s.array_name].maxRow = s.row;
     if (s.col > arrays[s.array_name].maxCol) arrays[s.array_name].maxCol = s.col;
@@ -469,7 +470,7 @@ async function loadPanelHeat() {
     html += '<div style="display:flex;flex-wrap:wrap;gap:1rem">';
     dates.forEach(function(d) {
       html += '<div><div style="color:#64748b;font-size:0.75rem;margin-bottom:0.25rem;text-align:center">' + d.slice(5) + '</div>';
-      html += '<table style="border-collapse:collapse">';
+      html += '<table style="border-collapse:collapse;width:auto">';
       for (var r = 1; r <= dim.maxRow; r++) {
         html += '<tr>';
         for (var c = 1; c <= dim.maxCol; c++) {
@@ -562,7 +563,7 @@ async function loadPanelSummary() {
   arrayNames.forEach(function(aName) {
     var dim = arrayDims[aName];
     html += '<h3 style="color:#94a3b8;margin:1rem 0 0.25rem">' + aName + '</h3>';
-    html += '<table style="border-collapse:separate;border-spacing:3px">';
+    html += '<table style="border-collapse:separate;border-spacing:3px;width:auto">';
     for (var r = 1; r <= dim.maxRow; r++) {
       html += '<tr>';
       for (var c = 1; c <= dim.maxCol; c++) {
@@ -578,7 +579,7 @@ async function loadPanelSummary() {
           var sz = panelCellSize(slotMap[cellLabel], BASE_W, BASE_H);
           var barH = Math.round(pct * 100);
           html += '<td style="position:relative;overflow:hidden;width:' + sz.width + 'px;height:' + sz.height + 'px;' +
-            'background:#1e293b;border-radius:4px;vertical-align:bottom;padding:0" ' +
+            'background:#1e293b;border-radius:4px;vertical-align:bottom;padding:0;border:1px solid #334155" ' +
             'title="' + cellLabel + '\nTotal: ' + rec.total_kwh.toFixed(2) + ' kWh\nBest Hour: ' +
             (rec.best_hour_w || 0).toFixed(0) + ' W\nPoints: ' + (rec.data_points || 0).toLocaleString() + '">' +
             '<div style="position:absolute;bottom:0;left:0;right:0;height:' + barH + '%;' +
@@ -712,7 +713,7 @@ function renderSliderGrid(idx) {
   // Get all panel labels (columns except timestamp and total)
   var allLabels = Object.keys(row).filter(function(k) { return k !== 'timestamp' && k !== 'total'; }).sort();
 
-  // Find max power across entire day for consistent scale
+  // Find max power: use inverter_max_w if available, else fall back to day max
   var dayMax = 0;
   sliderData.forEach(function(r) {
     allLabels.forEach(function(lbl) {
@@ -720,6 +721,11 @@ function renderSliderGrid(idx) {
       if (v > dayMax) dayMax = v;
     });
   });
+  // Determine ceiling per label: inv_max_w if set, else dayMax
+  function getCeiling(lbl) {
+    var s = slotMap[lbl];
+    return (s && s.inv_max_w > 0) ? s.inv_max_w : dayMax;
+  }
 
   var unassigned = allLabels.filter(function(l) { return !slotMap[l]; });
   var arrayNames = Object.keys(arrayDims).sort();
@@ -731,7 +737,7 @@ function renderSliderGrid(idx) {
   arrayNames.forEach(function(aName) {
     var dim = arrayDims[aName];
     html += '<h3 style="color:#94a3b8;margin:0.75rem 0 0.25rem">' + aName + '</h3>';
-    html += '<table style="border-collapse:separate;border-spacing:3px">';
+    html += '<table style="border-collapse:separate;border-spacing:3px;width:auto">';
     for (var r = 1; r <= dim.maxRow; r++) {
       html += '<tr>';
       for (var c = 1; c <= dim.maxCol; c++) {
@@ -742,19 +748,21 @@ function renderSliderGrid(idx) {
         }
         if (cellLabel) {
           var v = row[cellLabel] || 0;
-          var pct = dayMax > 0 ? v / dayMax : 0;
+          var ceil = getCeiling(cellLabel);
+          var pct = ceil > 0 ? Math.min(v / ceil, 1) : 0;
           var color = gradientColor(pct);
           var sz = panelCellSize(slotMap[cellLabel], BASE_W, BASE_H);
           var barH = Math.round(pct * 100);
           html += '<td style="position:relative;overflow:hidden;width:' + sz.width + 'px;height:' + sz.height + 'px;' +
-            'background:#1e293b;border-radius:4px;padding:0" ' +
-            'title="' + cellLabel + ' (' + slotMap[cellLabel].panel_name + ')\n' + v.toFixed(1) + ' W">' +
+            'background:#1e293b;border-radius:4px;padding:0;border:1px solid #334155" ' +
+            'title="' + cellLabel + ' (' + slotMap[cellLabel].panel_name + ')\n' + v.toFixed(1) + ' W / ' + ceil.toFixed(0) + ' W (' + (pct * 100).toFixed(0) + '%)">' +
             '<div style="position:absolute;bottom:0;left:0;right:0;height:' + barH + '%;' +
-            'background:' + color + '44;border-top:2px solid ' + color + ';transition:height 0.15s"></div>' +
+            'background:' + color + '55;transition:height 0.15s"></div>' +
             '<div style="position:relative;z-index:1;text-align:center;padding:4px 2px;height:100%;' +
             'display:flex;flex-direction:column;justify-content:center">' +
             '<div style="font-size:0.6rem;color:#94a3b8">' + slotMap[cellLabel].panel_name + '</div>' +
             '<div style="font-weight:700;font-size:0.85rem;color:#f8fafc">' + v.toFixed(0) + ' <span style="font-size:0.6rem;font-weight:400">W</span></div>' +
+            '<div style="font-size:0.5rem;color:#64748b">' + (pct * 100).toFixed(0) + '%</div>' +
             '</div></td>';
         } else {
           html += '<td style="width:' + BASE_W + 'px;height:' + BASE_H + 'px;' +
@@ -857,6 +865,7 @@ async function loadPanelConfig() {
         panel_serial: e.panel_serial || '',
         panel_install_date: e.panel_install_date || '',
         panel_removed_date: e.panel_removed_date || '',
+        inverter_max_w: e.inverter_max_w != null ? e.inverter_max_w : '',
         inverter_removed_date: e.inverter_removed_date || '',
         notes: e.notes || ''
       });
@@ -996,6 +1005,7 @@ function renderSlotEditor() {
     {key:'panel_serial', label:'Serial', type:'text', w:'90px', group:'panel'},
     {key:'panel_install_date', label:'Installed', type:'date', w:'110px', group:'panel'},
     {key:'panel_removed_date', label:'Removed', type:'date', w:'110px', group:'panel'},
+    {key:'inverter_max_w', label:'Max W', type:'number', w:'60px', group:'inverter'},
     {key:'inverter_removed_date', label:'Removed', type:'date', w:'110px', group:'inverter'},
     {key:'notes', label:'Notes', type:'text', w:'120px', group:'other'}
   ];
@@ -1098,6 +1108,7 @@ async function saveSlots() {
     if (p.panel_serial) row.panel_serial = p.panel_serial;
     if (p.panel_install_date) row.panel_install_date = p.panel_install_date;
     if (p.panel_removed_date) row.panel_removed_date = p.panel_removed_date;
+    if (p.inverter_max_w !== '') row.inverter_max_w = Number(p.inverter_max_w);
     if (p.inverter_removed_date) row.inverter_removed_date = p.inverter_removed_date;
     if (p.notes) row.notes = p.notes;
     return row;
@@ -1127,6 +1138,11 @@ async function saveSlots() {
 
     loadIntraday();
     loadPanelOverlay();
+
+    // Auto-load slider with most recent day
+    if (document.getElementById('sliderDayPick').value) {
+      loadSliderDay();
+    }
   } catch (err) {
     document.getElementById('statusLine').innerHTML =
       '<span class="err">\u25cf Error: ' + err.message +
