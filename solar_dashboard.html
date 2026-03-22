@@ -116,7 +116,10 @@
       <input type="range" id="timeSlider" min="0" max="0" value="0" style="width:100%">
       <span class="slider-time" id="sliderTimeLabel">--:--</span>
     </div>
-    <div id="sliderTickLabels" style="display:flex;justify-content:space-between;padding:0 2px;margin-top:-0.25rem;margin-bottom:0.25rem"></div>
+    <div id="sliderTickLabels" style="position:relative;height:14px;margin-top:-0.25rem;overflow:hidden"></div>
+    <div id="sliderElevLabels" style="position:relative;height:14px;overflow:hidden;margin-bottom:0.25rem">
+      <span style="position:absolute;right:0;font-size:0.55rem;color:#475569">&#9728; elev</span>
+    </div>
   </div>
 </div>
 <div class="chart-row">
@@ -689,6 +692,39 @@ async function loadPanelSummary() {
   box.innerHTML = html;
 }
 
+// ---- Solar elevation (simplified solar position) ----
+function solarElevation(dateStr, localHour, lat, lon) {
+  // dateStr: 'YYYY-MM-DD', localHour: decimal hours (local time), lat/lon degrees
+  // Determine UTC offset: US Central = UTC-6 (CST) or UTC-5 (CDT)
+  var parts = dateStr.split('-');
+  var y = parseInt(parts[0]), m = parseInt(parts[1]), d = parseInt(parts[2]);
+  // Approximate DST (second Sunday in March to first Sunday in November)
+  var dstStart = new Date(y, 2, 8); // March 8 at earliest
+  dstStart.setDate(8 + (7 - dstStart.getDay()) % 7);
+  var dstEnd = new Date(y, 10, 1); // Nov 1 at earliest
+  dstEnd.setDate(1 + (7 - dstEnd.getDay()) % 7);
+  var dt = new Date(y, m - 1, d);
+  var utcOffset = (dt >= dstStart && dt < dstEnd) ? -5 : -6;
+  var utcHour = localHour - utcOffset;
+  // Day of year
+  var start = new Date(y, 0, 1);
+  var doy = Math.floor((dt - start) / 86400000) + 1;
+  // Solar declination (Spencer, 1971)
+  var B = (doy - 1) * 2 * Math.PI / 365;
+  var decl = 0.006918 - 0.399912 * Math.cos(B) + 0.070257 * Math.sin(B)
+           - 0.006758 * Math.cos(2*B) + 0.000907 * Math.sin(2*B)
+           - 0.002697 * Math.cos(3*B) + 0.00148 * Math.sin(3*B);
+  // Equation of time (minutes)
+  var eot = 229.18 * (0.000075 + 0.001868 * Math.cos(B) - 0.032077 * Math.sin(B)
+           - 0.014615 * Math.cos(2*B) - 0.04089 * Math.sin(2*B));
+  // Solar time
+  var solarTime = utcHour + (eot / 60) + (lon / 15);
+  var ha = (solarTime - 12) * 15 * Math.PI / 180; // hour angle
+  var latRad = lat * Math.PI / 180;
+  var sinElev = Math.sin(latRad) * Math.sin(decl) + Math.cos(latRad) * Math.cos(decl) * Math.cos(ha);
+  return Math.asin(sinElev) * 180 / Math.PI;
+}
+
 // ---- Interactive time-slider array ----
 var sliderData = [];       // panel_wide rows for the chosen day
 var sliderSlots = [];      // cached slots
@@ -738,24 +774,21 @@ async function loadSliderDay() {
   document.getElementById('sliderControls').style.display = 'block';
 
   // Build hourly tick marks
-  var tickHtml = '';
   var seenHours = {};
   sliderTimestamps.forEach(function(ts, i) {
     var hh = ts.slice(11, 13);
     var mm = ts.slice(14, 16);
     if (!seenHours[hh] && mm === '00') { seenHours[hh] = i; }
     else if (!seenHours[hh]) {
-      // pick closest to :00
       if (!seenHours['_first_' + hh] || Math.abs(parseInt(mm)) < Math.abs(parseInt(sliderTimestamps[seenHours['_first_' + hh]].slice(14,16)))) {
         seenHours['_first_' + hh] = i;
       }
     }
   });
-  // Collect hour indices
   var hourIndices = [];
-  var allHours = Object.keys(seenHours).filter(function(k) { return k.length === 2; }).sort();
-  allHours.forEach(function(hh) { hourIndices.push({ hour: hh, idx: seenHours[hh] }); });
-  // Fill in any hours only seen as _first_
+  Object.keys(seenHours).filter(function(k) { return k.length === 2; }).sort().forEach(function(hh) {
+    hourIndices.push({ hour: hh, idx: seenHours[hh] });
+  });
   Object.keys(seenHours).filter(function(k) { return k.startsWith('_first_'); }).forEach(function(k) {
     var hh = k.slice(7);
     if (!seenHours[hh]) hourIndices.push({ hour: hh, idx: seenHours[k] });
@@ -763,16 +796,25 @@ async function loadSliderDay() {
   hourIndices.sort(function(a, b) { return a.idx - b.idx; });
 
   var total = sliderTimestamps.length - 1;
-  var labelHtml = '';
-  hourIndices.forEach(function(h) {
+  var LAT = 43.09, LON = -88.33;
+  var timeLabelHtml = '';
+  var elevLabelHtml = '';
+  hourIndices.forEach(function(h, i) {
     var pct = total > 0 ? (h.idx / total * 100) : 0;
-    labelHtml += '<span style="position:absolute;left:' + pct.toFixed(1) + '%;transform:translateX(-50%);' +
-      'font-size:0.6rem;color:#64748b">' + h.hour + ':00</span>';
+    // Clamp: first label align left, last label align right, rest centered
+    var anchor = 'left:' + pct.toFixed(1) + '%;transform:translateX(-50%)';
+    if (i === 0 && pct < 5) anchor = 'left:0';
+    else if (i === hourIndices.length - 1 && pct > 95) anchor = 'right:0';
+    timeLabelHtml += '<span style="position:absolute;' + anchor + ';font-size:0.6rem;color:#64748b">' + h.hour + ':00</span>';
+    // Solar elevation for this hour (local time)
+    var localH = parseInt(h.hour);
+    var elev = solarElevation(dateVal, localH, LAT, LON);
+    var elevTxt = elev > 0 ? elev.toFixed(0) + '\u00b0' : '\u2014';
+    var elevColor = elev > 0 ? '#f59e0b' : '#334155';
+    elevLabelHtml += '<span style="position:absolute;' + anchor + ';font-size:0.6rem;color:' + elevColor + '">' + elevTxt + '</span>';
   });
-  document.getElementById('sliderTickLabels').innerHTML = '';
-  document.getElementById('sliderTickLabels').style.position = 'relative';
-  document.getElementById('sliderTickLabels').style.height = '14px';
-  document.getElementById('sliderTickLabels').innerHTML = labelHtml;
+  document.getElementById('sliderTickLabels').innerHTML = timeLabelHtml;
+  document.getElementById('sliderElevLabels').innerHTML = elevLabelHtml;
 
   renderSliderGrid(0);
   loadPanelOverlay(dateVal);
