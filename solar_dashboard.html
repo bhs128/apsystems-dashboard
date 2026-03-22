@@ -709,18 +709,20 @@ async function saveSlots() {
 
 // ---- Init ----
 (async function() {
-  // Set date pickers to most recent date with data
-  var today = new Date().toISOString().slice(0, 10);
-  document.getElementById('intradayDate').value = today;
-  document.getElementById('panelOverlayDate').value = today;
-
   try {
     await Promise.all([
       loadStatus(), loadDaily(), loadBilling(), loadFinance(),
       loadPanelHeat(), loadPanelSummary(), loadPanelConfig()
     ]);
-    // Auto-load today's intraday if we have data
+
+    // Set date pickers to most recent day with panel data, fall back to today
+    var daily = await get('/api/daily_energy');
+    var latest = daily.length ? daily[daily.length - 1].date : new Date().toISOString().slice(0, 10);
+    document.getElementById('intradayDate').value = latest;
+    document.getElementById('panelOverlayDate').value = latest;
+
     loadIntraday();
+    loadPanelOverlay();
   } catch (err) {
     document.getElementById('statusLine').innerHTML =
       '<span class="err">\u25cf Error: ' + err.message +
