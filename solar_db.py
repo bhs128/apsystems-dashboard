@@ -143,10 +143,11 @@ CREATE TABLE IF NOT EXISTS slots (
     panel_height_mm       REAL,
     panel_serial          TEXT,
     panel_install_date    TEXT,
+    panel_removed_date    TEXT,
     inverter_uid          TEXT,
     inverter_channel      INTEGER,
     inverter_install_date TEXT,
-    removed_date          TEXT,
+    inverter_removed_date TEXT,
     notes                 TEXT,
     PRIMARY KEY (array_id, row, col),
     FOREIGN KEY (array_id) REFERENCES arrays(array_id),
@@ -224,6 +225,21 @@ class SolarDB:
         if panels_count > 0 and slots_count == 0:
             self._migrate_panels_to_slots()
 
+        # Rename removed_date → panel_removed_date + add inverter_removed_date
+        slot_cols = {row[1] for row in
+                     self.conn.execute('PRAGMA table_info(slots)').fetchall()}
+        if 'removed_date' in slot_cols:
+            self.conn.execute(
+                'ALTER TABLE slots RENAME COLUMN removed_date'
+                ' TO panel_removed_date')
+            self.conn.execute(
+                'ALTER TABLE slots ADD COLUMN inverter_removed_date TEXT')
+        elif 'panel_removed_date' not in slot_cols:
+            self.conn.execute(
+                'ALTER TABLE slots ADD COLUMN panel_removed_date TEXT')
+            self.conn.execute(
+                'ALTER TABLE slots ADD COLUMN inverter_removed_date TEXT')
+
     def _migrate_panels_to_slots(self):
         """One-time migration: populate arrays + slots from legacy panels table."""
         cursor = self.conn.execute('SELECT * FROM panels')
@@ -262,13 +278,13 @@ class SolarDB:
                 INSERT OR IGNORE INTO slots
                     (array_id, row, col, panel_name, panel_model,
                      panel_capacity_w, panel_width_mm, panel_height_mm,
-                     panel_install_date, inverter_uid, inverter_channel,
-                     removed_date, notes)
+                     panel_install_date, panel_removed_date,
+                     inverter_uid, inverter_channel, notes)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (name_to_id[name], r, c, p.get('panel_name'), p.get('model'),
                   p.get('capacity_w'), p.get('width_mm'), p.get('height_mm'),
-                  p.get('install_date'), p.get('inverter_uid'), p.get('channel'),
-                  p.get('removed_date'), p.get('notes')))
+                  p.get('install_date'), p.get('removed_date'),
+                  p.get('inverter_uid'), p.get('channel'), p.get('notes')))
 
     # ------------------------------------------------------------------
     # Upsert methods (INSERT OR REPLACE — idempotent)
@@ -342,7 +358,7 @@ class SolarDB:
         allowed = {'panel_name', 'array_name', 'array_row', 'array_col',
                    'tilt_deg', 'azimuth_deg', 'model', 'capacity_w',
                    'width_mm', 'height_mm', 'install_date', 'removed_date',
-                   'notes'}
+                   'panel_removed_date', 'inverter_removed_date', 'notes'}
         updates = {k: v for k, v in fields.items() if k in allowed}
         # Ensure row exists
         self.conn.execute(
@@ -405,8 +421,9 @@ class SolarDB:
         """Create or update a physical slot."""
         allowed = {'string_id', 'panel_name', 'panel_model', 'panel_capacity_w',
                    'panel_width_mm', 'panel_height_mm', 'panel_serial',
-                   'panel_install_date', 'inverter_uid', 'inverter_channel',
-                   'inverter_install_date', 'removed_date', 'notes'}
+                   'panel_install_date', 'panel_removed_date',
+                   'inverter_uid', 'inverter_channel',
+                   'inverter_install_date', 'inverter_removed_date', 'notes'}
         updates = {k: v for k, v in fields.items() if k in allowed}
         self.conn.execute(
             'INSERT OR IGNORE INTO slots (array_id, row, col)'
@@ -453,8 +470,9 @@ class SolarDB:
                    s.string_id, st.name AS string_name,
                    s.panel_name, s.panel_model, s.panel_capacity_w,
                    s.panel_width_mm, s.panel_height_mm, s.panel_serial,
-                   s.panel_install_date, s.inverter_uid, s.inverter_channel,
-                   s.inverter_install_date, s.removed_date, s.notes
+                   s.panel_install_date, s.panel_removed_date,
+                   s.inverter_uid, s.inverter_channel,
+                   s.inverter_install_date, s.inverter_removed_date, s.notes
             FROM slots s
             JOIN arrays a ON a.array_id = s.array_id
             LEFT JOIN strings st ON st.string_id = s.string_id
@@ -486,7 +504,7 @@ class SolarDB:
                    s.panel_model AS model, s.panel_capacity_w AS capacity_w,
                    s.panel_width_mm AS width_mm, s.panel_height_mm AS height_mm,
                    s.panel_install_date AS install_date,
-                   s.removed_date, s.notes
+                   s.panel_removed_date, s.inverter_removed_date, s.notes
             FROM slots s
             JOIN arrays a ON a.array_id = s.array_id
             ORDER BY a.name, s.row, s.col,
