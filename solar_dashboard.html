@@ -593,23 +593,38 @@ async function saveStrings() {
 function renderSlotEditor() {
   var box = document.getElementById('panelCfgBox');
   var fields = [
-    {key:'array_id', label:'Array', type:'select', w:'100px'},
-    {key:'row', label:'Row', type:'number', w:'45px'},
-    {key:'col', label:'Col', type:'number', w:'45px'},
-    {key:'string_id', label:'String', type:'select', w:'90px'},
-    {key:'panel_name', label:'Name', type:'text', w:'70px'},
-    {key:'panel_model', label:'Model', type:'text', w:'140px'},
-    {key:'panel_capacity_w', label:'Watts', type:'number', w:'60px'},
-    {key:'panel_width_mm', label:'W mm', type:'number', w:'60px'},
-    {key:'panel_height_mm', label:'H mm', type:'number', w:'60px'},
-    {key:'panel_serial', label:'Serial', type:'text', w:'90px'},
-    {key:'panel_install_date', label:'Panel Installed', type:'date', w:'110px'},
-    {key:'panel_removed_date', label:'Panel Removed', type:'date', w:'110px'},
-    {key:'inverter_removed_date', label:'Inv Removed', type:'date', w:'110px'},
-    {key:'notes', label:'Notes', type:'text', w:'120px'}
+    {key:'array_id', label:'Array', type:'select', w:'100px', group:'slot'},
+    {key:'row', label:'Row', type:'number', w:'45px', group:'slot'},
+    {key:'col', label:'Col', type:'number', w:'45px', group:'slot'},
+    {key:'string_id', label:'String', type:'select', w:'90px', group:'slot'},
+    {key:'panel_name', label:'Name', type:'text', w:'70px', group:'panel'},
+    {key:'panel_model', label:'Model', type:'text', w:'140px', group:'panel'},
+    {key:'panel_capacity_w', label:'Watts', type:'number', w:'60px', group:'panel'},
+    {key:'panel_width_mm', label:'W mm', type:'number', w:'60px', group:'panel'},
+    {key:'panel_height_mm', label:'H mm', type:'number', w:'60px', group:'panel'},
+    {key:'panel_serial', label:'Serial', type:'text', w:'90px', group:'panel'},
+    {key:'panel_install_date', label:'Installed', type:'date', w:'110px', group:'panel'},
+    {key:'panel_removed_date', label:'Removed', type:'date', w:'110px', group:'panel'},
+    {key:'inverter_removed_date', label:'Removed', type:'date', w:'110px', group:'inverter'},
+    {key:'notes', label:'Notes', type:'text', w:'120px', group:'other'}
   ];
 
-  var html = '<table><tr><th style="white-space:nowrap">Inverter-Ch</th>';
+  var slotCols = fields.filter(function(f) { return f.group === 'slot'; }).length;
+  var panelCols = fields.filter(function(f) { return f.group === 'panel'; }).length;
+  var invCols = fields.filter(function(f) { return f.group === 'inverter'; }).length;
+  var otherCols = fields.filter(function(f) { return f.group === 'other'; }).length;
+
+  // Group header row
+  var html = '<table><tr>' +
+    '<th></th>' +
+    '<th colspan="' + slotCols + '" style="text-align:center;color:#f59e0b;border-bottom:2px solid #f59e0b33">Slot</th>' +
+    '<th colspan="' + panelCols + '" style="text-align:center;color:#22c55e;border-bottom:2px solid #22c55e33">Panel Info</th>' +
+    '<th colspan="' + invCols + '" style="text-align:center;color:#3b82f6;border-bottom:2px solid #3b82f633">Inverter Info</th>' +
+    (otherCols ? '<th colspan="' + otherCols + '"></th>' : '') +
+    '</tr>';
+
+  // Column label row
+  html += '<tr><th style="white-space:nowrap">Inverter-Ch</th>';
   fields.forEach(function(f) { html += '<th style="white-space:nowrap">' + f.label + '</th>'; });
   html += '</tr>';
 
