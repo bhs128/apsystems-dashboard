@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS slots (
     panel_removed_date    TEXT,
     inverter_uid          TEXT,
     inverter_channel      INTEGER,
+    inverter_max_w        REAL,
     inverter_install_date TEXT,
     inverter_removed_date TEXT,
     notes                 TEXT,
@@ -239,6 +240,10 @@ class SolarDB:
                 'ALTER TABLE slots ADD COLUMN panel_removed_date TEXT')
             self.conn.execute(
                 'ALTER TABLE slots ADD COLUMN inverter_removed_date TEXT')
+
+        if 'inverter_max_w' not in slot_cols:
+            self.conn.execute(
+                'ALTER TABLE slots ADD COLUMN inverter_max_w REAL')
 
     def _migrate_panels_to_slots(self):
         """One-time migration: populate arrays + slots from legacy panels table."""
@@ -422,7 +427,7 @@ class SolarDB:
         allowed = {'string_id', 'panel_name', 'panel_model', 'panel_capacity_w',
                    'panel_width_mm', 'panel_height_mm', 'panel_serial',
                    'panel_install_date', 'panel_removed_date',
-                   'inverter_uid', 'inverter_channel',
+                   'inverter_uid', 'inverter_channel', 'inverter_max_w',
                    'inverter_install_date', 'inverter_removed_date', 'notes'}
         updates = {k: v for k, v in fields.items() if k in allowed}
         self.conn.execute(
@@ -471,7 +476,7 @@ class SolarDB:
                    s.panel_name, s.panel_model, s.panel_capacity_w,
                    s.panel_width_mm, s.panel_height_mm, s.panel_serial,
                    s.panel_install_date, s.panel_removed_date,
-                   s.inverter_uid, s.inverter_channel,
+                   s.inverter_uid, s.inverter_channel, s.inverter_max_w,
                    s.inverter_install_date, s.inverter_removed_date, s.notes
             FROM slots s
             JOIN arrays a ON a.array_id = s.array_id
