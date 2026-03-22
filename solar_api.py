@@ -11,8 +11,11 @@ Endpoints:
   GET /api/panel_wide          — wide-format panel data (?date=)
   GET /api/billing             — utility billing periods
   GET /api/finance             — HELOC balance history
-  GET /api/inverters           — inverter registry
-  GET /                        — serves solar_dashboard.html
+  GET /api/inverters           — inverter registry  GET|PUT /api/arrays          — array definitions (tilt/azimuth)
+  GET|PUT /api/strings         — string (circuit) definitions
+  GET|PUT /api/slots           — physical slot assignments
+  GET /api/slot_history        — slot replacement history
+  GET|PUT /api/panels          — backward-compatible flat view  GET /                        — serves solar_dashboard.html
 
 Designed to run on a Raspberry Pi as a systemd service.
 Bind to 0.0.0.0 so any device on the LAN can reach it.
@@ -207,6 +210,90 @@ def api_panels_put():
         row['channel'] = int(row['channel'])
     db.upsert_panel_configs_bulk(data)
     return jsonify({'updated': len(data)})
+
+
+@app.route('/api/arrays', methods=['GET'])
+def api_arrays_get():
+    """Return array definitions (shared tilt/azimuth per array)."""
+    df = db.get_arrays()
+    return jsonify(json.loads(df.to_json(orient='records')))
+
+
+@app.route('/api/arrays', methods=['PUT', 'POST'])
+def api_arrays_put():
+    """Upsert arrays. Body: single dict or list with name + optional fields."""
+    data = request.get_json(force=True)
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        return jsonify({'error': 'expected object or array'}), 400
+    for row in data:
+        if 'name' not in row:
+            return jsonify({'error': 'each array needs a name'}), 400
+        name = row.pop('name')
+        row.pop('array_id', None)
+        db.upsert_array(name, **row)
+    return jsonify({'updated': len(data)})
+
+
+@app.route('/api/strings', methods=['GET'])
+def api_strings_get():
+    """Return string (circuit) definitions."""
+    df = db.get_strings()
+    return jsonify(json.loads(df.to_json(orient='records')))
+
+
+@app.route('/api/strings', methods=['PUT', 'POST'])
+def api_strings_put():
+    """Upsert strings. Body: single dict or list with name + optional notes."""
+    data = request.get_json(force=True)
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        return jsonify({'error': 'expected object or array'}), 400
+    for row in data:
+        if 'name' not in row:
+            return jsonify({'error': 'each string needs a name'}), 400
+        name = row.pop('name')
+        row.pop('string_id', None)
+        db.upsert_string(name, **row)
+    return jsonify({'updated': len(data)})
+
+
+@app.route('/api/slots', methods=['GET'])
+def api_slots_get():
+    """Return all slot assignments (joined with array and string names)."""
+    df = db.get_slots()
+    return jsonify(json.loads(df.to_json(orient='records')))
+
+
+@app.route('/api/slots', methods=['PUT', 'POST'])
+def api_slots_put():
+    """Upsert slots. Body: list of dicts with array_id, row, col, + fields."""
+    data = request.get_json(force=True)
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        return jsonify({'error': 'expected object or array'}), 400
+    for row in data:
+        for field in ('array_id', 'row', 'col'):
+            if field not in row:
+                return jsonify({'error': f'each slot needs {field}'}), 400
+        row['array_id'] = int(row['array_id'])
+        row['row'] = int(row['row'])
+        row['col'] = int(row['col'])
+    db.upsert_slots_bulk(data)
+    return jsonify({'updated': len(data)})
+
+
+@app.route('/api/slot_history')
+def api_slot_history():
+    """Query slot replacement history. Optional: ?array_id=&row=&col="""
+    array_id = request.args.get('array_id', type=int)
+    row = request.args.get('row', type=int)
+    col = request.args.get('col', type=int)
+    df = db.get_slot_history(array_id=array_id, row=row, col=col)
+    return jsonify(json.loads(df.to_json(orient='records')))
 
 
 @app.route('/api/system_summary')

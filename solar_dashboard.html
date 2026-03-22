@@ -112,8 +112,13 @@
 <div class="chart-box">
   <h2>Panel Configuration</h2>
   <p style="font-size:0.75rem;color:#64748b;margin-bottom:0.75rem">
-    Assign arrays, positions, angles, and specs to each panel. Changes are saved to the database.
+    Define arrays (shared tilt/azimuth), optional strings, then assign panels to physical slots.
   </p>
+  <h3 style="color:#f59e0b;margin-bottom:0.5rem">Arrays</h3>
+  <div class="panel-cfg" id="arrayCfgBox"><div class="loading">Loading ...</div></div>
+  <h3 style="color:#f59e0b;margin:1rem 0 0.5rem">Strings</h3>
+  <div class="panel-cfg" id="stringCfgBox"><div class="loading">Loading ...</div></div>
+  <h3 style="color:#f59e0b;margin:1rem 0 0.5rem">Slots</h3>
   <div class="panel-cfg" id="panelCfgBox"><div class="loading">Loading ...</div></div>
 </div>
 
@@ -410,128 +415,275 @@ async function loadPanelSummary() {
 }
 
 // ---- Panel configuration editor ----
-var panelCfgData = [];
+var arrayCfgData = [];
+var stringCfgData = [];
+var slotCfgData = [];
+
 async function loadPanelConfig() {
-  var panels = await get('/api/panels');
-  var inverters = await get('/api/inverters');
-  var box = document.getElementById('panelCfgBox');
+  var results = await Promise.all([
+    get('/api/arrays'), get('/api/strings'), get('/api/slots'), get('/api/inverters')
+  ]);
+  var arrays = results[0], strings = results[1], slots = results[2], inverters = results[3];
 
-  // Build panel list from inverters (each has 2 channels)
-  // Merge in any existing config
-  var cfgMap = {};
-  panels.forEach(function(p) { cfgMap[p.inverter_uid + '-' + p.channel] = p; });
+  // ---- Arrays ----
+  arrayCfgData = arrays.map(function(a) {
+    return { array_id: a.array_id, name: a.name,
+             tilt_deg: a.tilt_deg != null ? a.tilt_deg : '',
+             azimuth_deg: a.azimuth_deg != null ? a.azimuth_deg : '',
+             notes: a.notes || '' };
+  });
+  renderArrayEditor();
 
-  panelCfgData = [];
+  // ---- Strings ----
+  stringCfgData = strings.map(function(s) {
+    return { string_id: s.string_id, name: s.name, notes: s.notes || '' };
+  });
+  renderStringEditor();
+
+  // ---- Slots (keyed by inverter channel) ----
+  var slotMap = {};
+  slots.forEach(function(s) {
+    if (s.inverter_uid) slotMap[s.inverter_uid + '-' + s.inverter_channel] = s;
+  });
+
+  slotCfgData = [];
   inverters.forEach(function(inv) {
     if (!inv.is_active) return;
     [1, 2].forEach(function(ch) {
       var key = inv.uid + '-' + ch;
-      var existing = cfgMap[key] || {};
-      panelCfgData.push({
-        inverter_uid: inv.uid,
-        channel: ch,
-        panel_name: existing.panel_name || '',
-        array_name: existing.array_name || '',
-        array_row: existing.array_row != null ? existing.array_row : '',
-        array_col: existing.array_col != null ? existing.array_col : '',
-        tilt_deg: existing.tilt_deg != null ? existing.tilt_deg : '',
-        azimuth_deg: existing.azimuth_deg != null ? existing.azimuth_deg : '',
-        model: existing.model || '',
-        capacity_w: existing.capacity_w != null ? existing.capacity_w : '',
-        width_mm: existing.width_mm != null ? existing.width_mm : '',
-        height_mm: existing.height_mm != null ? existing.height_mm : '',
-        install_date: existing.install_date || '',
-        removed_date: existing.removed_date || '',
-        notes: existing.notes || ''
+      var e = slotMap[key] || {};
+      slotCfgData.push({
+        inverter_uid: inv.uid, channel: ch,
+        array_id: e.array_id != null ? e.array_id : '',
+        row: e.row != null ? e.row : '',
+        col: e.col != null ? e.col : '',
+        string_id: e.string_id != null ? e.string_id : '',
+        panel_name: e.panel_name || '',
+        panel_model: e.panel_model || '',
+        panel_capacity_w: e.panel_capacity_w != null ? e.panel_capacity_w : '',
+        panel_width_mm: e.panel_width_mm != null ? e.panel_width_mm : '',
+        panel_height_mm: e.panel_height_mm != null ? e.panel_height_mm : '',
+        panel_serial: e.panel_serial || '',
+        panel_install_date: e.panel_install_date || '',
+        removed_date: e.removed_date || '',
+        notes: e.notes || ''
       });
     });
   });
 
+  // Sort by array name, row, col, then uid-ch
+  slotCfgData.sort(function(a, b) {
+    var aArr = arrayCfgData.find(function(x) { return x.array_id == a.array_id; });
+    var bArr = arrayCfgData.find(function(x) { return x.array_id == b.array_id; });
+    var aa = (aArr ? aArr.name : '').localeCompare(bArr ? bArr.name : '');
+    if (aa !== 0) return aa;
+    var ra = a.row !== '' ? Number(a.row) : 9999;
+    var rb = b.row !== '' ? Number(b.row) : 9999;
+    if (ra !== rb) return ra - rb;
+    var ca = a.col !== '' ? Number(a.col) : 9999;
+    var cb = b.col !== '' ? Number(b.col) : 9999;
+    if (ca !== cb) return ca - cb;
+    return (a.inverter_uid + '-' + a.channel).localeCompare(b.inverter_uid + '-' + b.channel);
+  });
+
+  renderSlotEditor();
+}
+
+// ---- Arrays sub-editor ----
+function renderArrayEditor() {
+  var box = document.getElementById('arrayCfgBox');
+  var html = '<table><tr><th>Name</th><th>Tilt\u00b0</th><th>Azimuth\u00b0</th><th>Notes</th></tr>';
+  arrayCfgData.forEach(function(a, idx) {
+    html += '<tr>' +
+      '<td><input type="text" data-aidx="' + idx + '" data-field="name" value="' +
+        (a.name || '').replace(/"/g, '&quot;') + '" style="min-width:120px"></td>' +
+      '<td><input type="number" step="any" data-aidx="' + idx + '" data-field="tilt_deg" value="' +
+        a.tilt_deg + '" style="min-width:60px"></td>' +
+      '<td><input type="number" step="any" data-aidx="' + idx + '" data-field="azimuth_deg" value="' +
+        a.azimuth_deg + '" style="min-width:70px"></td>' +
+      '<td><input type="text" data-aidx="' + idx + '" data-field="notes" value="' +
+        (a.notes || '').replace(/"/g, '&quot;') + '" style="min-width:120px"></td></tr>';
+  });
+  html += '</table>';
+  html += '<button class="btn-save" onclick="addArray()" style="margin-right:0.5rem">+ Add Array</button>';
+  html += '<button class="btn-save" onclick="saveArrays()">Save Arrays</button>';
+  box.innerHTML = html;
+  box.querySelectorAll('input').forEach(function(inp) {
+    inp.addEventListener('change', function() {
+      arrayCfgData[parseInt(this.dataset.aidx)][this.dataset.field] = this.value;
+    });
+  });
+}
+
+function addArray() {
+  arrayCfgData.push({ array_id: null, name: '', tilt_deg: '', azimuth_deg: '', notes: '' });
+  renderArrayEditor();
+}
+
+async function saveArrays() {
+  var payload = arrayCfgData.filter(function(a) { return a.name; }).map(function(a) {
+    var obj = { name: a.name };
+    if (a.tilt_deg !== '') obj.tilt_deg = Number(a.tilt_deg);
+    if (a.azimuth_deg !== '') obj.azimuth_deg = Number(a.azimuth_deg);
+    if (a.notes) obj.notes = a.notes;
+    return obj;
+  });
+  try {
+    var resp = await put('/api/arrays', payload);
+    toast('Saved ' + resp.updated + ' arrays', true);
+    var arrays = await get('/api/arrays');
+    arrayCfgData = arrays.map(function(a) {
+      return { array_id: a.array_id, name: a.name,
+               tilt_deg: a.tilt_deg != null ? a.tilt_deg : '',
+               azimuth_deg: a.azimuth_deg != null ? a.azimuth_deg : '',
+               notes: a.notes || '' };
+    });
+    renderArrayEditor();
+    renderSlotEditor();
+  } catch(e) { toast('Error: ' + e.message, false); }
+}
+
+// ---- Strings sub-editor ----
+function renderStringEditor() {
+  var box = document.getElementById('stringCfgBox');
+  var html = '<table><tr><th>Name</th><th>Notes</th></tr>';
+  stringCfgData.forEach(function(s, idx) {
+    html += '<tr>' +
+      '<td><input type="text" data-sidx="' + idx + '" data-field="name" value="' +
+        (s.name || '').replace(/"/g, '&quot;') + '" style="min-width:120px"></td>' +
+      '<td><input type="text" data-sidx="' + idx + '" data-field="notes" value="' +
+        (s.notes || '').replace(/"/g, '&quot;') + '" style="min-width:200px"></td></tr>';
+  });
+  html += '</table>';
+  html += '<button class="btn-save" onclick="addString()" style="margin-right:0.5rem">+ Add String</button>';
+  html += '<button class="btn-save" onclick="saveStrings()">Save Strings</button>';
+  box.innerHTML = html;
+  box.querySelectorAll('input').forEach(function(inp) {
+    inp.addEventListener('change', function() {
+      stringCfgData[parseInt(this.dataset.sidx)][this.dataset.field] = this.value;
+    });
+  });
+}
+
+function addString() {
+  stringCfgData.push({ string_id: null, name: '', notes: '' });
+  renderStringEditor();
+}
+
+async function saveStrings() {
+  var payload = stringCfgData.filter(function(s) { return s.name; }).map(function(s) {
+    var obj = { name: s.name };
+    if (s.notes) obj.notes = s.notes;
+    return obj;
+  });
+  try {
+    var resp = await put('/api/strings', payload);
+    toast('Saved ' + resp.updated + ' strings', true);
+    var strings = await get('/api/strings');
+    stringCfgData = strings.map(function(s) {
+      return { string_id: s.string_id, name: s.name, notes: s.notes || '' };
+    });
+    renderStringEditor();
+    renderSlotEditor();
+  } catch(e) { toast('Error: ' + e.message, false); }
+}
+
+// ---- Slots editor (main grid, one row per active inverter channel) ----
+function renderSlotEditor() {
+  var box = document.getElementById('panelCfgBox');
   var fields = [
+    {key:'array_id', label:'Array', type:'select', w:'100px'},
+    {key:'row', label:'Row', type:'number', w:'45px'},
+    {key:'col', label:'Col', type:'number', w:'45px'},
+    {key:'string_id', label:'String', type:'select', w:'90px'},
     {key:'panel_name', label:'Name', type:'text', w:'70px'},
-    {key:'array_name', label:'Array', type:'text', w:'90px'},
-    {key:'array_row', label:'Row', type:'number', w:'45px'},
-    {key:'array_col', label:'Col', type:'number', w:'45px'},
-    {key:'tilt_deg', label:'Tilt°', type:'number', w:'55px'},
-    {key:'azimuth_deg', label:'Azimuth°', type:'number', w:'65px'},
-    {key:'model', label:'Model', type:'text', w:'140px'},
-    {key:'capacity_w', label:'Watts', type:'number', w:'60px'},
-    {key:'width_mm', label:'W mm', type:'number', w:'60px'},
-    {key:'height_mm', label:'H mm', type:'number', w:'60px'},
-    {key:'install_date', label:'Installed', type:'date', w:'110px'},
+    {key:'panel_model', label:'Model', type:'text', w:'140px'},
+    {key:'panel_capacity_w', label:'Watts', type:'number', w:'60px'},
+    {key:'panel_width_mm', label:'W mm', type:'number', w:'60px'},
+    {key:'panel_height_mm', label:'H mm', type:'number', w:'60px'},
+    {key:'panel_serial', label:'Serial', type:'text', w:'90px'},
+    {key:'panel_install_date', label:'Installed', type:'date', w:'110px'},
     {key:'removed_date', label:'Removed', type:'date', w:'110px'},
     {key:'notes', label:'Notes', type:'text', w:'120px'}
   ];
 
-  // Sort by Array, Row, Col, then Inverter-Ch
-  panelCfgData.sort(function(a, b) {
-    var aa = (a.array_name || '').localeCompare(b.array_name || '');
-    if (aa !== 0) return aa;
-    var ra = (a.array_row != null && a.array_row !== '' ? Number(a.array_row) : 9999);
-    var rb = (b.array_row != null && b.array_row !== '' ? Number(b.array_row) : 9999);
-    if (ra !== rb) return ra - rb;
-    var ca = (a.array_col != null && a.array_col !== '' ? Number(a.array_col) : 9999);
-    var cb = (b.array_col != null && b.array_col !== '' ? Number(b.array_col) : 9999);
-    if (ca !== cb) return ca - cb;
-    var ua = a.inverter_uid + '-' + a.channel;
-    var ub = b.inverter_uid + '-' + b.channel;
-    return ua.localeCompare(ub);
-  });
-
   var html = '<table><tr><th style="white-space:nowrap">Inverter-Ch</th>';
-  fields.forEach(function(f) {
-    html += '<th style="white-space:nowrap">' + f.label + '</th>';
-  });
+  fields.forEach(function(f) { html += '<th style="white-space:nowrap">' + f.label + '</th>'; });
   html += '</tr>';
 
-  panelCfgData.forEach(function(p, idx) {
+  slotCfgData.forEach(function(p, idx) {
     var shortUid = p.inverter_uid.slice(-6);
     var rowStyle = p.removed_date ? ' style="opacity:0.45"' : '';
     html += '<tr' + rowStyle + '><td style="color:#94a3b8;white-space:nowrap;font-family:monospace">' +
             shortUid + '-' + p.channel + '</td>';
     fields.forEach(function(f) {
-      var val = p[f.key] != null ? p[f.key] : '';
-      html += '<td><input type="' + f.type + '" data-idx="' + idx + '" data-field="' + f.key +
-              '" value="' + String(val).replace(/"/g, '&quot;') +
-              '" style="min-width:' + f.w + '"></td>';
+      if (f.key === 'array_id') {
+        html += '<td><select data-idx="' + idx + '" data-field="array_id" style="min-width:' + f.w + '">';
+        html += '<option value="">\u2014</option>';
+        arrayCfgData.forEach(function(a) {
+          if (a.array_id != null) {
+            var sel = (p.array_id == a.array_id) ? ' selected' : '';
+            html += '<option value="' + a.array_id + '"' + sel + '>' + a.name + '</option>';
+          }
+        });
+        html += '</select></td>';
+      } else if (f.key === 'string_id') {
+        html += '<td><select data-idx="' + idx + '" data-field="string_id" style="min-width:' + f.w + '">';
+        html += '<option value="">\u2014</option>';
+        stringCfgData.forEach(function(s) {
+          if (s.string_id != null) {
+            var sel = (p.string_id == s.string_id) ? ' selected' : '';
+            html += '<option value="' + s.string_id + '"' + sel + '>' + s.name + '</option>';
+          }
+        });
+        html += '</select></td>';
+      } else {
+        var val = p[f.key] != null ? p[f.key] : '';
+        html += '<td><input type="' + f.type + '" data-idx="' + idx + '" data-field="' + f.key +
+                '" value="' + String(val).replace(/"/g, '&quot;') +
+                '" style="min-width:' + f.w + '"></td>';
+      }
     });
     html += '</tr>';
   });
+
   html += '</table>';
-  html += '<button class="btn-save" onclick="savePanelConfig()">Save Panel Configuration</button>';
+  html += '<button class="btn-save" onclick="saveSlots()">Save Slots</button>';
   box.innerHTML = html;
 
-  // Attach live edit handlers
-  box.querySelectorAll('input').forEach(function(inp) {
+  box.querySelectorAll('input, select').forEach(function(inp) {
     inp.addEventListener('change', function() {
-      var idx = parseInt(this.dataset.idx);
-      var field = this.dataset.field;
-      panelCfgData[idx][field] = this.value;
+      slotCfgData[parseInt(this.dataset.idx)][this.dataset.field] = this.value;
     });
   });
 }
 
-async function savePanelConfig() {
-  var payload = panelCfgData.map(function(p) {
-    var row = { inverter_uid: p.inverter_uid, channel: p.channel };
+async function saveSlots() {
+  var payload = slotCfgData.filter(function(p) {
+    return p.array_id !== '' && p.row !== '' && p.col !== '';
+  }).map(function(p) {
+    var row = {
+      array_id: Number(p.array_id),
+      row: Number(p.row),
+      col: Number(p.col),
+      inverter_uid: p.inverter_uid,
+      inverter_channel: p.channel
+    };
+    if (p.string_id !== '') row.string_id = Number(p.string_id);
     if (p.panel_name) row.panel_name = p.panel_name;
-    if (p.array_name) row.array_name = p.array_name;
-    if (p.array_row !== '') row.array_row = Number(p.array_row);
-    if (p.array_col !== '') row.array_col = Number(p.array_col);
-    if (p.tilt_deg !== '') row.tilt_deg = Number(p.tilt_deg);
-    if (p.azimuth_deg !== '') row.azimuth_deg = Number(p.azimuth_deg);
-    if (p.model) row.model = p.model;
-    if (p.capacity_w !== '') row.capacity_w = Number(p.capacity_w);
-    if (p.width_mm !== '') row.width_mm = Number(p.width_mm);
-    if (p.height_mm !== '') row.height_mm = Number(p.height_mm);
-    if (p.install_date) row.install_date = p.install_date;
+    if (p.panel_model) row.panel_model = p.panel_model;
+    if (p.panel_capacity_w !== '') row.panel_capacity_w = Number(p.panel_capacity_w);
+    if (p.panel_width_mm !== '') row.panel_width_mm = Number(p.panel_width_mm);
+    if (p.panel_height_mm !== '') row.panel_height_mm = Number(p.panel_height_mm);
+    if (p.panel_serial) row.panel_serial = p.panel_serial;
+    if (p.panel_install_date) row.panel_install_date = p.panel_install_date;
     if (p.removed_date) row.removed_date = p.removed_date;
     if (p.notes) row.notes = p.notes;
     return row;
   });
   try {
-    var resp = await put('/api/panels', payload);
-    toast('Saved ' + resp.updated + ' panels', true);
+    var resp = await put('/api/slots', payload);
+    toast('Saved ' + resp.updated + ' slots', true);
   } catch(e) {
     toast('Error: ' + e.message, false);
   }
