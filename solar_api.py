@@ -18,6 +18,7 @@ Designed to run on a Raspberry Pi as a systemd service.
 Bind to 0.0.0.0 so any device on the LAN can reach it.
 """
 
+import json
 import os
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -48,13 +49,12 @@ def date_params():
 
 
 def df_to_json(df):
-    """Convert a DataFrame to a JSON-serializable list of dicts."""
-    # Convert timestamps to strings for JSON
+    """Convert a DataFrame to a JSON-serializable list of dicts.
+    Uses pandas' to_json which correctly renders NaN as null."""
     for col in df.columns:
         if hasattr(df[col], 'dt'):
             df[col] = df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
-    # Replace NaN with None so jsonify produces valid JSON (not literal NaN)
-    return df.where(df.notna(), None).to_dict(orient='records')
+    return json.loads(df.to_json(orient='records'))
 
 
 # ------------------------------------------------------------------
@@ -189,7 +189,7 @@ def api_inverter_telemetry():
 def api_panels_get():
     """Return panel metadata (user-assigned config + specs)."""
     df = db.get_panels()
-    return jsonify(df.where(df.notna(), None).to_dict(orient='records'))
+    return jsonify(json.loads(df.to_json(orient='records')))
 
 
 @app.route('/api/panels', methods=['PUT', 'POST'])
