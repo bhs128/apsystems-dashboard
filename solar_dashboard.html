@@ -441,6 +441,7 @@ async function loadPanelConfig() {
         width_mm: existing.width_mm != null ? existing.width_mm : '',
         height_mm: existing.height_mm != null ? existing.height_mm : '',
         install_date: existing.install_date || '',
+        removed_date: existing.removed_date || '',
         notes: existing.notes || ''
       });
     });
@@ -458,6 +459,7 @@ async function loadPanelConfig() {
     {key:'width_mm', label:'W mm', type:'number', w:'60px'},
     {key:'height_mm', label:'H mm', type:'number', w:'60px'},
     {key:'install_date', label:'Installed', type:'date', w:'110px'},
+    {key:'removed_date', label:'Removed', type:'date', w:'110px'},
     {key:'notes', label:'Notes', type:'text', w:'120px'}
   ];
 
@@ -484,7 +486,8 @@ async function loadPanelConfig() {
 
   panelCfgData.forEach(function(p, idx) {
     var shortUid = p.inverter_uid.slice(-6);
-    html += '<tr><td style="color:#94a3b8;white-space:nowrap;font-family:monospace">' +
+    var rowStyle = p.removed_date ? ' style="opacity:0.45"' : '';
+    html += '<tr' + rowStyle + '><td style="color:#94a3b8;white-space:nowrap;font-family:monospace">' +
             shortUid + '-' + p.channel + '</td>';
     fields.forEach(function(f) {
       var val = p[f.key] != null ? p[f.key] : '';
@@ -522,6 +525,7 @@ async function savePanelConfig() {
     if (p.width_mm !== '') row.width_mm = Number(p.width_mm);
     if (p.height_mm !== '') row.height_mm = Number(p.height_mm);
     if (p.install_date) row.install_date = p.install_date;
+    if (p.removed_date) row.removed_date = p.removed_date;
     if (p.notes) row.notes = p.notes;
     return row;
   });
