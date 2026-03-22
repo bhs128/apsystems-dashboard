@@ -117,6 +117,58 @@ CREATE TABLE IF NOT EXISTS panels (
     PRIMARY KEY (inverter_uid, channel)
 );
 
+CREATE TABLE IF NOT EXISTS arrays (
+    array_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL UNIQUE,
+    tilt_deg    REAL,
+    azimuth_deg REAL,
+    notes       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS strings (
+    string_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL UNIQUE,
+    notes       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS slots (
+    array_id              INTEGER NOT NULL,
+    row                   INTEGER NOT NULL,
+    col                   INTEGER NOT NULL,
+    string_id             INTEGER,
+    panel_name            TEXT,
+    panel_model           TEXT,
+    panel_capacity_w      REAL,
+    panel_width_mm        REAL,
+    panel_height_mm       REAL,
+    panel_serial          TEXT,
+    panel_install_date    TEXT,
+    inverter_uid          TEXT,
+    inverter_channel      INTEGER,
+    inverter_install_date TEXT,
+    removed_date          TEXT,
+    notes                 TEXT,
+    PRIMARY KEY (array_id, row, col),
+    FOREIGN KEY (array_id) REFERENCES arrays(array_id),
+    FOREIGN KEY (string_id) REFERENCES strings(string_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_slots_inverter_unique
+    ON slots (inverter_uid, inverter_channel)
+    WHERE inverter_uid IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS slot_history (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    array_id      INTEGER NOT NULL,
+    row           INTEGER NOT NULL,
+    col           INTEGER NOT NULL,
+    event_type    TEXT NOT NULL CHECK(event_type IN ('panel', 'inverter')),
+    old_value     TEXT,
+    new_value     TEXT,
+    changed_date  TEXT NOT NULL,
+    notes         TEXT,
+    FOREIGN KEY (array_id, row, col) REFERENCES slots(array_id, row, col)
+);
+
 CREATE TABLE IF NOT EXISTS sync_log (
     source       TEXT PRIMARY KEY,  -- e.g. 'xls_curves', 'api_panels', ...
     last_date    TEXT NOT NULL,
@@ -157,12 +209,66 @@ class SolarDB:
         self.conn.commit()
 
     def _migrate(self):
-        """Add columns that may not exist in older databases."""
+        """Add columns / tables that may not exist in older databases."""
         cols = {row[1] for row in
                 self.conn.execute('PRAGMA table_info(panels)').fetchall()}
         if 'removed_date' not in cols:
             self.conn.execute(
                 'ALTER TABLE panels ADD COLUMN removed_date TEXT')
+
+        # Migrate flat panels → normalized arrays + slots (one-time)
+        panels_count = self.conn.execute(
+            'SELECT COUNT(*) FROM panels').fetchone()[0]
+        slots_count = self.conn.execute(
+            'SELECT COUNT(*) FROM slots').fetchone()[0]
+        if panels_count > 0 and slots_count == 0:
+            self._migrate_panels_to_slots()
+
+    def _migrate_panels_to_slots(self):
+        """One-time migration: populate arrays + slots from legacy panels table."""
+        cursor = self.conn.execute('SELECT * FROM panels')
+        col_names = [d[0] for d in cursor.description]
+        rows = cursor.fetchall()
+
+        # Build array lookup: name → (tilt, azimuth)
+        array_map = {}
+        for row in rows:
+            p = dict(zip(col_names, row))
+            name = p.get('array_name')
+            if not name:
+                continue
+            if name not in array_map:
+                array_map[name] = (p.get('tilt_deg'), p.get('azimuth_deg'))
+
+        # Insert arrays
+        name_to_id = {}
+        for name, (tilt, azimuth) in array_map.items():
+            self.conn.execute(
+                'INSERT OR IGNORE INTO arrays (name, tilt_deg, azimuth_deg)'
+                ' VALUES (?, ?, ?)', (name, tilt, azimuth))
+            aid = self.conn.execute(
+                'SELECT array_id FROM arrays WHERE name = ?',
+                (name,)).fetchone()[0]
+            name_to_id[name] = aid
+
+        # Insert slots
+        for row in rows:
+            p = dict(zip(col_names, row))
+            name = p.get('array_name')
+            r, c = p.get('array_row'), p.get('array_col')
+            if not name or r is None or c is None:
+                continue
+            self.conn.execute('''
+                INSERT OR IGNORE INTO slots
+                    (array_id, row, col, panel_name, panel_model,
+                     panel_capacity_w, panel_width_mm, panel_height_mm,
+                     panel_install_date, inverter_uid, inverter_channel,
+                     removed_date, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (name_to_id[name], r, c, p.get('panel_name'), p.get('model'),
+                  p.get('capacity_w'), p.get('width_mm'), p.get('height_mm'),
+                  p.get('install_date'), p.get('inverter_uid'), p.get('channel'),
+                  p.get('removed_date'), p.get('notes')))
 
     # ------------------------------------------------------------------
     # Upsert methods (INSERT OR REPLACE — idempotent)
@@ -259,10 +365,133 @@ class SolarDB:
                       if k not in ('inverter_uid', 'channel')}
             self.upsert_panel_config(uid, ch, **fields)
 
-    def get_panels(self):
+    # ------------------------------------------------------------------
+    # Arrays / Strings / Slots CRUD
+    # ------------------------------------------------------------------
+
+    def upsert_array(self, name, **fields):
+        """Create or update an array. Returns array_id."""
+        allowed = {'tilt_deg', 'azimuth_deg', 'notes'}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        self.conn.execute(
+            'INSERT OR IGNORE INTO arrays (name) VALUES (?)', (name,))
+        if updates:
+            set_clause = ', '.join(f'{k} = ?' for k in updates)
+            vals = list(updates.values()) + [name]
+            self.conn.execute(
+                f'UPDATE arrays SET {set_clause} WHERE name = ?', vals)
+        self.conn.commit()
+        return self.conn.execute(
+            'SELECT array_id FROM arrays WHERE name = ?',
+            (name,)).fetchone()[0]
+
+    def upsert_string(self, name, **fields):
+        """Create or update a string. Returns string_id."""
+        allowed = {'notes'}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        self.conn.execute(
+            'INSERT OR IGNORE INTO strings (name) VALUES (?)', (name,))
+        if updates:
+            set_clause = ', '.join(f'{k} = ?' for k in updates)
+            vals = list(updates.values()) + [name]
+            self.conn.execute(
+                f'UPDATE strings SET {set_clause} WHERE name = ?', vals)
+        self.conn.commit()
+        return self.conn.execute(
+            'SELECT string_id FROM strings WHERE name = ?',
+            (name,)).fetchone()[0]
+
+    def upsert_slot(self, array_id, row, col, **fields):
+        """Create or update a physical slot."""
+        allowed = {'string_id', 'panel_name', 'panel_model', 'panel_capacity_w',
+                   'panel_width_mm', 'panel_height_mm', 'panel_serial',
+                   'panel_install_date', 'inverter_uid', 'inverter_channel',
+                   'inverter_install_date', 'removed_date', 'notes'}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        self.conn.execute(
+            'INSERT OR IGNORE INTO slots (array_id, row, col)'
+            ' VALUES (?, ?, ?)', (array_id, row, col))
+        if updates:
+            set_clause = ', '.join(f'{k} = ?' for k in updates)
+            vals = list(updates.values()) + [array_id, row, col]
+            self.conn.execute(
+                f'UPDATE slots SET {set_clause}'
+                f' WHERE array_id = ? AND row = ? AND col = ?', vals)
+        self.conn.commit()
+
+    def upsert_slots_bulk(self, rows):
+        """rows: list of dicts with array_id, row, col, + optional fields."""
+        for row in rows:
+            aid, r, c = row['array_id'], row['row'], row['col']
+            fields = {k: v for k, v in row.items()
+                      if k not in ('array_id', 'row', 'col')}
+            self.upsert_slot(aid, r, c, **fields)
+
+    def log_slot_change(self, array_id, row, col, event_type,
+                        old_value, new_value, changed_date, notes=None):
+        """Record a panel or inverter swap at a slot position."""
+        self.conn.execute(
+            'INSERT INTO slot_history'
+            ' (array_id, row, col, event_type, old_value, new_value,'
+            '  changed_date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (array_id, row, col, event_type, old_value, new_value,
+             changed_date, notes))
+        self.conn.commit()
+
+    def get_arrays(self):
         return pd.read_sql(
-            'SELECT * FROM panels ORDER BY array_name, array_row, array_col,'
-            ' inverter_uid, channel', self.conn)
+            'SELECT * FROM arrays ORDER BY name', self.conn)
+
+    def get_strings(self):
+        return pd.read_sql(
+            'SELECT * FROM strings ORDER BY name', self.conn)
+
+    def get_slots(self):
+        """Return all slots joined with array and string names."""
+        return pd.read_sql('''
+            SELECT s.array_id, a.name AS array_name, s.row, s.col,
+                   s.string_id, st.name AS string_name,
+                   s.panel_name, s.panel_model, s.panel_capacity_w,
+                   s.panel_width_mm, s.panel_height_mm, s.panel_serial,
+                   s.panel_install_date, s.inverter_uid, s.inverter_channel,
+                   s.inverter_install_date, s.removed_date, s.notes
+            FROM slots s
+            JOIN arrays a ON a.array_id = s.array_id
+            LEFT JOIN strings st ON st.string_id = s.string_id
+            ORDER BY a.name, s.row, s.col
+        ''', self.conn)
+
+    def get_slot_history(self, array_id=None, row=None, col=None):
+        q = ('SELECT h.*, a.name AS array_name FROM slot_history h'
+             ' JOIN arrays a ON a.array_id = h.array_id')
+        params, clauses = [], []
+        if array_id is not None:
+            clauses.append('h.array_id = ?'); params.append(array_id)
+        if row is not None:
+            clauses.append('h.row = ?'); params.append(row)
+        if col is not None:
+            clauses.append('h.col = ?'); params.append(col)
+        if clauses:
+            q += ' WHERE ' + ' AND '.join(clauses)
+        q += ' ORDER BY h.changed_date DESC, h.id DESC'
+        return pd.read_sql(q, self.conn, params=params)
+
+    def get_panels(self):
+        """Backward-compatible panel view from normalized tables."""
+        return pd.read_sql('''
+            SELECT s.inverter_uid, s.inverter_channel AS channel,
+                   s.panel_name, a.name AS array_name,
+                   s.row AS array_row, s.col AS array_col,
+                   a.tilt_deg, a.azimuth_deg,
+                   s.panel_model AS model, s.panel_capacity_w AS capacity_w,
+                   s.panel_width_mm AS width_mm, s.panel_height_mm AS height_mm,
+                   s.panel_install_date AS install_date,
+                   s.removed_date, s.notes
+            FROM slots s
+            JOIN arrays a ON a.array_id = s.array_id
+            ORDER BY a.name, s.row, s.col,
+                     s.inverter_uid, s.inverter_channel
+        ''', self.conn)
 
     def update_sync_log(self, source, last_date, record_count=None):
         self.conn.execute(
