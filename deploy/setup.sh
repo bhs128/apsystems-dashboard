@@ -21,10 +21,17 @@ echo "  Install dir: $INSTALL_DIR"
 echo "  User:        $CURRENT_USER"
 echo ""
 
-# --- 1. Python dependencies ---
-echo "[1/4] Installing Python packages ..."
-pip3 install --user flask pandas requests openpyxl xlrd 2>/dev/null || \
-    pip3 install flask pandas requests openpyxl xlrd
+# --- 1. Python virtual environment + dependencies ---
+VENV_DIR="$INSTALL_DIR/venv"
+echo "[1/4] Setting up Python venv + packages ..."
+if [ ! -d "$VENV_DIR" ]; then
+    python3 -m venv "$VENV_DIR"
+    echo "  Created venv at $VENV_DIR"
+else
+    echo "  Venv already exists."
+fi
+"$VENV_DIR/bin/pip" install --upgrade pip > /dev/null
+"$VENV_DIR/bin/pip" install -r "$INSTALL_DIR/requirements.txt"
 echo "  Done."
 
 # --- 2. Configuration (.env) ---

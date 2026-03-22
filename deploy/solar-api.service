@@ -16,7 +16,7 @@ After=network.target
 Type=simple
 User=__USER__
 WorkingDirectory=__INSTALL_DIR__
-ExecStart=/usr/bin/python3 __INSTALL_DIR__/solar_api.py --port 8080
+ExecStart=__INSTALL_DIR__/venv/bin/python __INSTALL_DIR__/solar_api.py --port 8080
 Restart=on-failure
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
