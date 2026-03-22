@@ -461,6 +461,21 @@ async function loadPanelConfig() {
     {key:'notes', label:'Notes', type:'text', w:'120px'}
   ];
 
+  // Sort by Array, Row, Col, then Inverter-Ch
+  panelCfgData.sort(function(a, b) {
+    var aa = (a.array_name || '').localeCompare(b.array_name || '');
+    if (aa !== 0) return aa;
+    var ra = (a.array_row != null && a.array_row !== '' ? Number(a.array_row) : 9999);
+    var rb = (b.array_row != null && b.array_row !== '' ? Number(b.array_row) : 9999);
+    if (ra !== rb) return ra - rb;
+    var ca = (a.array_col != null && a.array_col !== '' ? Number(a.array_col) : 9999);
+    var cb = (b.array_col != null && b.array_col !== '' ? Number(b.array_col) : 9999);
+    if (ca !== cb) return ca - cb;
+    var ua = a.inverter_uid + '-' + a.channel;
+    var ub = b.inverter_uid + '-' + b.channel;
+    return ua.localeCompare(ub);
+  });
+
   var html = '<table><tr><th style="white-space:nowrap">Inverter-Ch</th>';
   fields.forEach(function(f) {
     html += '<th style="white-space:nowrap">' + f.label + '</th>';
