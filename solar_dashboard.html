@@ -114,6 +114,7 @@
   </div>
 </div>
 
+<div class="chart-row">
 <div class="chart-box">
   <h2>Interactive Array View</h2>
   <p class="section-label">Drag the slider to see each panel&rsquo;s instantaneous power output through the day</p>
@@ -127,6 +128,7 @@
     <span class="slider-time" id="sliderTimeLabel">--:--</span>
   </div>
   <div id="sliderGridBox"></div>
+</div>
 </div>
 
 <div class="chart-box">
@@ -579,11 +581,11 @@ async function loadPanelSummary() {
           var sz = panelCellSize(slotMap[cellLabel], BASE_W, BASE_H);
           var barH = Math.round(pct * 100);
           html += '<td style="position:relative;overflow:hidden;width:' + sz.width + 'px;height:' + sz.height + 'px;' +
-            'background:#1e293b;border-radius:4px;vertical-align:bottom;padding:0;border:1px solid #334155" ' +
+            'background:#0f172a;border-radius:4px;vertical-align:bottom;padding:0;border:1px solid #334155" ' +
             'title="' + cellLabel + '\nTotal: ' + rec.total_kwh.toFixed(2) + ' kWh\nBest Hour: ' +
             (rec.best_hour_w || 0).toFixed(0) + ' W\nPoints: ' + (rec.data_points || 0).toLocaleString() + '">' +
             '<div style="position:absolute;bottom:0;left:0;right:0;height:' + barH + '%;' +
-            'background:' + color + '44;border-top:2px solid ' + color + '"></div>' +
+            'background:' + color + ';opacity:0.6"></div>' +
             '<div style="position:relative;z-index:1;text-align:center;padding:4px 2px;height:100%;' +
             'display:flex;flex-direction:column;justify-content:center">' +
             '<div style="font-size:0.6rem;color:#94a3b8">' + slotMap[cellLabel].panel_name + '</div>' +
@@ -754,10 +756,10 @@ function renderSliderGrid(idx) {
           var sz = panelCellSize(slotMap[cellLabel], BASE_W, BASE_H);
           var barH = Math.round(pct * 100);
           html += '<td style="position:relative;overflow:hidden;width:' + sz.width + 'px;height:' + sz.height + 'px;' +
-            'background:#1e293b;border-radius:4px;padding:0;border:1px solid #334155" ' +
+            'background:#0f172a;border-radius:4px;padding:0;border:1px solid #334155" ' +
             'title="' + cellLabel + ' (' + slotMap[cellLabel].panel_name + ')\n' + v.toFixed(1) + ' W / ' + ceil.toFixed(0) + ' W (' + (pct * 100).toFixed(0) + '%)">' +
             '<div style="position:absolute;bottom:0;left:0;right:0;height:' + barH + '%;' +
-            'background:' + color + '55;transition:height 0.15s"></div>' +
+            'background:' + color + ';opacity:0.6;transition:height 0.15s"></div>' +
             '<div style="position:relative;z-index:1;text-align:center;padding:4px 2px;height:100%;' +
             'display:flex;flex-direction:column;justify-content:center">' +
             '<div style="font-size:0.6rem;color:#94a3b8">' + slotMap[cellLabel].panel_name + '</div>' +
