@@ -112,6 +112,13 @@ def api_panel_readings():
     return jsonify(df_to_json(df))
 
 
+@app.route('/api/panel_dates')
+def api_panel_dates():
+    """Return sorted list of dates that have panel readings."""
+    dates = sorted(db.get_dates_with_data('panel_readings'))
+    return jsonify(dates)
+
+
 @app.route('/api/panel_daily')
 def api_panel_daily():
     """Per-channel daily kWh totals — useful for heatmaps."""
