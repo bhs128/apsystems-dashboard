@@ -111,7 +111,8 @@ CREATE TABLE IF NOT EXISTS panels (
     capacity_w   REAL,                       -- nameplate watts
     width_mm     REAL,                       -- physical width
     height_mm    REAL,                       -- physical height
-    install_date TEXT,                       -- YYYY-MM-DD
+    install_date  TEXT,                       -- YYYY-MM-DD
+    removed_date TEXT,                       -- YYYY-MM-DD (NULL = still active)
     notes        TEXT,
     PRIMARY KEY (inverter_uid, channel)
 );
@@ -152,7 +153,16 @@ class SolarDB:
 
     def _ensure_schema(self):
         self.conn.executescript(SCHEMA_SQL)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self):
+        """Add columns that may not exist in older databases."""
+        cols = {row[1] for row in
+                self.conn.execute('PRAGMA table_info(panels)').fetchall()}
+        if 'removed_date' not in cols:
+            self.conn.execute(
+                'ALTER TABLE panels ADD COLUMN removed_date TEXT')
 
     # ------------------------------------------------------------------
     # Upsert methods (INSERT OR REPLACE — idempotent)
@@ -225,7 +235,8 @@ class SolarDB:
         """Update panel metadata. Only supplied fields are changed."""
         allowed = {'panel_name', 'array_name', 'array_row', 'array_col',
                    'tilt_deg', 'azimuth_deg', 'model', 'capacity_w',
-                   'width_mm', 'height_mm', 'install_date', 'notes'}
+                   'width_mm', 'height_mm', 'install_date', 'removed_date',
+                   'notes'}
         updates = {k: v for k, v in fields.items() if k in allowed}
         # Ensure row exists
         self.conn.execute(
