@@ -171,6 +171,36 @@ CREATE TABLE IF NOT EXISTS slot_history (
     FOREIGN KEY (array_id, row, col) REFERENCES slots(array_id, row, col)
 );
 
+CREATE TABLE IF NOT EXISTS weather_daily (
+    date             TEXT NOT NULL PRIMARY KEY,  -- YYYY-MM-DD
+    temp_max_c       REAL,
+    temp_min_c       REAL,
+    temp_mean_c      REAL,
+    dewpoint_mean_c  REAL,
+    humidity_mean_pct REAL,
+    pressure_hpa     REAL,
+    cloud_cover_pct  REAL,
+    precip_mm        REAL,
+    ghi_mj_m2       REAL,          -- daily shortwave radiation sum
+    pm25_aqi        REAL,          -- PM2.5 AQI index
+    pm25_ugm3       REAL,          -- PM2.5 concentration µg/m³
+    pm10_ugm3       REAL,
+    pwv_mm          REAL,          -- precipitable water vapor (derived)
+    k_est           REAL           -- estimated atmospheric k from conditions
+);
+
+CREATE TABLE IF NOT EXISTS solcast_estimates (
+    timestamp   TEXT NOT NULL,     -- YYYY-MM-DD HH:MM:SS (local)
+    date        TEXT NOT NULL,     -- YYYY-MM-DD (for easy grouping)
+    type        TEXT NOT NULL,     -- 'forecast' or 'actual'
+    pv_estimate REAL,              -- kW (P50)
+    pv_estimate10 REAL,            -- kW (P10 — low)
+    pv_estimate90 REAL,            -- kW (P90 — high)
+    PRIMARY KEY (timestamp, type)
+);
+CREATE INDEX IF NOT EXISTS idx_solcast_date
+    ON solcast_estimates (date);
+
 CREATE TABLE IF NOT EXISTS sync_log (
     source       TEXT PRIMARY KEY,  -- e.g. 'xls_curves', 'api_panels', ...
     last_date    TEXT NOT NULL,
@@ -516,6 +546,26 @@ class SolarDB:
                      s.inverter_uid, s.inverter_channel
         ''', self.conn)
 
+    def upsert_weather_daily(self, rows):
+        """rows: [(date, temp_max, temp_min, temp_mean, dewpoint_mean,
+                   humidity_mean, pressure, cloud_cover, precip,
+                   ghi, pm25_aqi, pm25_ugm3, pm10, pwv_mm, k_est), ...]"""
+        self.conn.executemany(
+            'INSERT OR REPLACE INTO weather_daily'
+            ' (date, temp_max_c, temp_min_c, temp_mean_c, dewpoint_mean_c,'
+            '  humidity_mean_pct, pressure_hpa, cloud_cover_pct, precip_mm,'
+            '  ghi_mj_m2, pm25_aqi, pm25_ugm3, pm10_ugm3, pwv_mm, k_est)'
+            ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', rows)
+        self.conn.commit()
+
+    def upsert_solcast_estimates(self, rows):
+        """rows: [(timestamp, date, type, pv_est, pv10, pv90), ...]"""
+        self.conn.executemany(
+            'INSERT OR REPLACE INTO solcast_estimates'
+            ' (timestamp, date, type, pv_estimate, pv_estimate10, pv_estimate90)'
+            ' VALUES (?, ?, ?, ?, ?, ?)', rows)
+        self.conn.commit()
+
     def update_sync_log(self, source, last_date, record_count=None):
         self.conn.execute(
             'INSERT OR REPLACE INTO sync_log'
@@ -611,10 +661,36 @@ class SolarDB:
     def get_sync_status(self):
         return pd.read_sql('SELECT * FROM sync_log ORDER BY source', self.conn)
 
+    def get_weather_daily(self, start_date=None, end_date=None):
+        q = 'SELECT * FROM weather_daily'
+        params, clauses = [], []
+        if start_date:
+            clauses.append('date >= ?'); params.append(start_date)
+        if end_date:
+            clauses.append('date <= ?'); params.append(end_date)
+        if clauses:
+            q += ' WHERE ' + ' AND '.join(clauses)
+        q += ' ORDER BY date'
+        return pd.read_sql(q, self.conn, params=params)
+
+    def get_solcast_estimates(self, start_date=None, end_date=None, est_type=None):
+        q = 'SELECT * FROM solcast_estimates'
+        params, clauses = [], []
+        if start_date:
+            clauses.append('date >= ?'); params.append(start_date)
+        if end_date:
+            clauses.append('date <= ?'); params.append(end_date)
+        if est_type:
+            clauses.append('type = ?'); params.append(est_type)
+        if clauses:
+            q += ' WHERE ' + ' AND '.join(clauses)
+        q += ' ORDER BY timestamp'
+        return pd.read_sql(q, self.conn, params=params)
+
     def get_date_range(self, table):
         """Return (min_date, max_date, count) for a table."""
         col = {'system_readings': 'timestamp', 'panel_readings': 'timestamp',
-               'inverter_telemetry': 'timestamp',
+               'inverter_telemetry': 'timestamp', 'solcast_estimates': 'timestamp',
                'billing_periods': 'meter_date', 'inverters': 'uid'}.get(table, 'date')
         row = self.conn.execute(
             f'SELECT MIN({col}), MAX({col}), COUNT(*) FROM {table}'
@@ -624,7 +700,7 @@ class SolarDB:
     def get_dates_with_data(self, table):
         """Return set of YYYY-MM-DD dates that have data."""
         col = {'system_readings': 'timestamp', 'panel_readings': 'timestamp',
-               'inverter_telemetry': 'timestamp',
+               'inverter_telemetry': 'timestamp', 'solcast_estimates': 'timestamp',
                'billing_periods': 'meter_date', 'inverters': 'uid'}.get(table, 'date')
         rows = self.conn.execute(
             f'SELECT DISTINCT SUBSTR({col}, 1, 10) FROM {table}'

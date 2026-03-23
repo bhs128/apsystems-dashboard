@@ -18,16 +18,30 @@ Designed to be safe to re-run (upsert semantics throughout).
 """
 
 import argparse
+import json
+import math
 import os
 import re
 import sys
 import time
 from datetime import datetime, timedelta
 from calendar import month_name
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 import pandas as pd
 
 SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Load .env file into environment (same file used by ema_api_pull.py)
+_env_file = os.path.join(SERVICE_DIR, '.env')
+if os.path.exists(_env_file):
+    with open(_env_file) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith('#') and '=' in _line:
+                _k, _v = _line.split('=', 1)
+                os.environ.setdefault(_k.strip(), _v.strip())
 
 from solar_db import SolarDB
 
@@ -46,6 +60,15 @@ PANEL_DIR = os.path.join(DATA_DIR, 'panel_data')
 
 # Panel data availability start (from probe results)
 PANEL_DATA_START = '2025-08-01'
+
+# --- Weather / atmospheric config (from .env or environment) ---
+OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast'
+AQICN_TOKEN = os.environ.get('AQICN_TOKEN', '')
+AQICN_STATION = os.environ.get('AQICN_STATION', '11752')
+
+# Solcast config
+SOLCAST_API_KEY = os.environ.get('SOLCAST_API_KEY', '')
+SOLCAST_SITE_ID = os.environ.get('SOLCAST_SITE_ID', '')
 
 
 # ======================================================================
@@ -613,8 +636,202 @@ def sync_inverter_telemetry(db, app_id, app_secret, start=None, end=None, invert
 
 
 # ======================================================================
-# Status report
+# Weather & atmospheric data sync
 # ======================================================================
+
+def _http_get_json(url, headers=None):
+    """Simple JSON GET with timeout. Returns parsed dict or None."""
+    req = Request(url)
+    if headers:
+        for k, v in headers.items():
+            req.add_header(k, v)
+    try:
+        with urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except (URLError, HTTPError, json.JSONDecodeError) as e:
+        print(f'    WARNING: HTTP request failed: {e}')
+        return None
+
+
+def _pwv_from_dewpoint(td_celsius):
+    """Estimate precipitable water vapor (mm) from dewpoint using
+    the Reitan (1963) formula scaled to match NSRDB column-integrated values.
+    Reitan gives surface-level estimate; multiply by ~3 to approximate
+    total column PWV (validated against NSRDB monthly averages)."""
+    pwv_cm = 0.1 * math.exp(1.2 + 0.0614 * td_celsius)
+    return pwv_cm * 10 * 3.0   # mm, column-integrated estimate
+
+
+def sync_weather(db):
+    """Pull daily weather from Open-Meteo (last 7 days) and
+    current PM2.5 from AQICN. Upserts into weather_daily."""
+    today = datetime.now().strftime('%Y-%m-%d')
+    week_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+
+    # --- Open-Meteo: daily + hourly for PWV derivation ---
+    params = (
+        f'?latitude=43.09&longitude=-88.33'
+        f'&daily=temperature_2m_max,temperature_2m_min,'
+        f'dewpoint_2m_mean,precipitation_sum,shortwave_radiation_sum'
+        f'&hourly=cloud_cover,relative_humidity_2m,surface_pressure,dewpoint_2m'
+        f'&timezone=America/Chicago'
+        f'&start_date={week_ago}&end_date={today}'
+    )
+    meteo = _http_get_json(OPEN_METEO_URL + params)
+    if not meteo or 'daily' not in meteo:
+        print('  Weather: Open-Meteo unavailable, skipping.')
+        return
+
+    daily = meteo['daily']
+    hourly = meteo['hourly']
+
+    # Pre-compute daytime averages from hourly data (8am-6pm local)
+    day_stats = {}  # date -> {cloud, rh, pressure, dewpoint, pwv}
+    for i, t in enumerate(hourly['time']):
+        dt = t[:10]
+        hour = int(t[11:13])
+        if hour < 8 or hour > 17:
+            continue
+        if dt not in day_stats:
+            day_stats[dt] = {'cloud': [], 'rh': [], 'pres': [], 'td': []}
+        if hourly['cloud_cover'][i] is not None:
+            day_stats[dt]['cloud'].append(hourly['cloud_cover'][i])
+        if hourly['relative_humidity_2m'][i] is not None:
+            day_stats[dt]['rh'].append(hourly['relative_humidity_2m'][i])
+        if hourly['surface_pressure'][i] is not None:
+            day_stats[dt]['pres'].append(hourly['surface_pressure'][i])
+        if hourly['dewpoint_2m'][i] is not None:
+            day_stats[dt]['td'].append(hourly['dewpoint_2m'][i])
+
+    # --- AQICN: latest PM2.5 (applies to today) ---
+    pm25_aqi, pm25_ugm3, pm10_ugm3 = None, None, None
+    if AQICN_TOKEN:
+        aq = _http_get_json(
+            f'https://api.waqi.info/feed/@{AQICN_STATION}/'
+            f'?token={AQICN_TOKEN}')
+        if aq and aq.get('status') == 'ok':
+            iaqi = aq['data'].get('iaqi', {})
+            pm25_aqi = aq['data'].get('aqi')
+            pm25_ugm3 = iaqi.get('pm25', {}).get('v')
+            pm10_ugm3 = iaqi.get('pm10', {}).get('v')
+
+    # --- Build rows ---
+    rows = []
+    existing = db.get_dates_with_data('weather_daily')
+    for j, date_str in enumerate(daily['time']):
+        tmax = daily['temperature_2m_max'][j]
+        tmin = daily['temperature_2m_min'][j]
+        tmean = (tmax + tmin) / 2 if tmax is not None and tmin is not None else None
+        td_mean = daily['dewpoint_2m_mean'][j]
+        precip = daily['precipitation_sum'][j]
+        ghi = daily['shortwave_radiation_sum'][j]
+
+        ds = day_stats.get(date_str, {})
+        cloud = sum(ds.get('cloud', [])) / len(ds['cloud']) if ds.get('cloud') else None
+        rh = sum(ds.get('rh', [])) / len(ds['rh']) if ds.get('rh') else None
+        pres = sum(ds.get('pres', [])) / len(ds['pres']) if ds.get('pres') else None
+
+        # PWV from daytime dewpoint average
+        pwv = None
+        if ds.get('td'):
+            avg_td = sum(ds['td']) / len(ds['td'])
+            pwv = round(_pwv_from_dewpoint(avg_td), 1)
+
+        # PM2.5 only for today
+        day_pm25_aqi = pm25_aqi if date_str == today else None
+        day_pm25 = pm25_ugm3 if date_str == today else None
+        day_pm10 = pm10_ugm3 if date_str == today else None
+        # Preserve existing PM2.5 for past days
+        if date_str in existing and date_str != today:
+            row_old = db.conn.execute(
+                'SELECT pm25_aqi, pm25_ugm3, pm10_ugm3 FROM weather_daily WHERE date=?',
+                (date_str,)).fetchone()
+            if row_old:
+                day_pm25_aqi, day_pm25, day_pm10 = row_old
+
+        rows.append((
+            date_str, tmax, tmin, tmean, td_mean, rh, pres,
+            cloud, precip, ghi,
+            day_pm25_aqi, day_pm25, day_pm10,
+            pwv, None  # k_est computed later
+        ))
+
+    if rows:
+        db.upsert_weather_daily(rows)
+        db.update_sync_log('weather', today, len(rows))
+        print(f'  Weather: {len(rows)} days ({rows[0][0]} .. {rows[-1][0]})')
+    else:
+        print('  Weather: no data.')
+
+
+# ======================================================================
+# Solcast PV forecast / estimated actuals sync
+# ======================================================================
+
+def _solcast_get(endpoint):
+    """Call a Solcast rooftop site endpoint. Returns parsed JSON or None."""
+    url = (f'https://api.solcast.com.au/rooftop_sites/'
+           f'{SOLCAST_SITE_ID}/{endpoint}?format=json')
+    return _http_get_json(url, headers={
+        'Authorization': f'Bearer {SOLCAST_API_KEY}'})
+
+
+def _solcast_to_rows(records, est_type):
+    """Convert Solcast records to DB rows with local timestamps."""
+    rows = []
+    for rec in records:
+        # period_end is UTC, convert to Central
+        utc_str = rec['period_end'].replace('T', ' ')[:19]
+        utc_dt = datetime.strptime(utc_str, '%Y-%m-%d %H:%M:%S')
+        # Determine CDT vs CST (approximate: CDT Mar second Sun - Nov first Sun)
+        month = utc_dt.month
+        is_dst = 3 < month < 11 or (month == 3 and utc_dt.day >= 8) or (month == 11 and utc_dt.day < 2)
+        offset = timedelta(hours=-5 if is_dst else -6)
+        local_dt = utc_dt + offset
+        ts = local_dt.strftime('%Y-%m-%d %H:%M:%S')
+        date_str = local_dt.strftime('%Y-%m-%d')
+        pv = rec.get('pv_estimate', 0)
+        pv10 = rec.get('pv_estimate10', 0)
+        pv90 = rec.get('pv_estimate90', 0)
+        rows.append((ts, date_str, est_type, pv, pv10, pv90))
+    return rows
+
+
+def sync_solcast(db):
+    """Pull Solcast forecasts and estimated actuals. Uses 2 API calls."""
+    if not SOLCAST_API_KEY or not SOLCAST_SITE_ID:
+        print('  Solcast: skipped (SOLCAST_API_KEY / SOLCAST_SITE_ID not set).')
+        return
+
+    total = 0
+
+    # Forecasts
+    data = _solcast_get('forecasts')
+    if data and 'forecasts' in data:
+        rows = _solcast_to_rows(data['forecasts'], 'forecast')
+        if rows:
+            db.upsert_solcast_estimates(rows)
+            total += len(rows)
+            dates = sorted(set(r[1] for r in rows))
+            print(f'  Solcast forecasts: {len(rows)} periods '
+                  f'({dates[0]} .. {dates[-1]})')
+
+    # Estimated actuals (recent history)
+    data = _solcast_get('estimated_actuals')
+    if data and 'estimated_actuals' in data:
+        rows = _solcast_to_rows(data['estimated_actuals'], 'actual')
+        if rows:
+            db.upsert_solcast_estimates(rows)
+            total += len(rows)
+            dates = sorted(set(r[1] for r in rows))
+            print(f'  Solcast actuals:   {len(rows)} periods '
+                  f'({dates[0]} .. {dates[-1]})')
+
+    if total:
+        today = datetime.now().strftime('%Y-%m-%d')
+        db.update_sync_log('solcast', today, total)
+    elif not total:
+        print('  Solcast: no data (API may be unavailable).')
 
 def show_status(db):
     """Print a summary of what's in the database."""
@@ -627,6 +844,8 @@ def show_status(db):
         ('daily_energy',        'Daily Energy'),
         ('panel_readings',      'Panel Readings (per-channel)'),
         ('inverter_telemetry',  'Inverter Telemetry (detailed)'),
+        ('weather_daily',       'Weather (daily)'),
+        ('solcast_estimates',   'Solcast Estimates'),
         ('billing_periods',     'Billing Periods'),
         ('finance',             'Finance (HELOC)'),
         ('inverters',           'Inverters'),
@@ -719,6 +938,13 @@ def main():
             sync_inverter_telemetry(db, app_id, app_secret,
                                     start=args.start, end=args.end,
                                     inverters=inverters)
+
+            # Weather & atmospheric data (no API key needed for Open-Meteo)
+            sync_weather(db)
+
+            # Solcast PV estimates (2 API calls, 10/day free tier)
+            sync_solcast(db)
+
             # Show today's summary
             print('\n  System summary:')
             pull_system_summary(app_id, app_secret)
