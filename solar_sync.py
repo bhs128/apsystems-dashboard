@@ -383,8 +383,8 @@ def backfill_finance(db, filepath=None):
 
 def sync_power_curves(db, app_id, app_secret, start=None, end=None):
     """Pull power curves from API for dates not yet in the DB."""
-    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-    end = end or yesterday
+    today = datetime.now().strftime('%Y-%m-%d')
+    end = end or today
 
     if not start:
         # Resume from last synced date
@@ -430,8 +430,8 @@ def sync_power_curves(db, app_id, app_secret, start=None, end=None):
 
 def sync_daily_energy(db, app_id, app_secret, start=None, end=None):
     """Pull daily energy from API for missing months."""
-    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-    end = end or yesterday
+    today = datetime.now().strftime('%Y-%m-%d')
+    end = end or today
 
     if not start:
         existing = db.get_dates_with_data('daily_energy')
@@ -467,8 +467,8 @@ def sync_daily_energy(db, app_id, app_secret, start=None, end=None):
 
 def sync_panel_data(db, app_id, app_secret, start=None, end=None, inverters=None):
     """Pull per-panel batch data from API for missing dates."""
-    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-    end = end or yesterday
+    today = datetime.now().strftime('%Y-%m-%d')
+    end = end or today
 
     if not start:
         existing = db.get_dates_with_data('panel_readings')
@@ -532,8 +532,8 @@ def sync_panel_data(db, app_id, app_secret, start=None, end=None, inverters=None
 def sync_inverter_telemetry(db, app_id, app_secret, start=None, end=None, inverters=None):
     """Pull detailed per-inverter telemetry (DC/AC power, voltage, current,
     frequency, temperature) from the single-inverter minutely endpoint."""
-    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-    end = end or yesterday
+    today = datetime.now().strftime('%Y-%m-%d')
+    end = end or today
 
     if not start:
         existing = db.get_dates_with_data('inverter_telemetry')
