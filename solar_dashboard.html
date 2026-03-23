@@ -564,9 +564,9 @@ async function loadPanelOverlay(dateVal) {
       if (meanActual[i] > peakActual) peakActual = meanActual[i];
       n++;
     }
-    // Per-panel kWh (5-min intervals)
-    var sunnyKwh = sunnySum * 5 / 60 / 1000;
-    var clippedKwh = clippedSum * 5 / 60 / 1000;
+    // System-level kWh (per-panel × nPanels, 5-min intervals)
+    var sunnyKwh = sunnySum * 5 / 60 / 1000 * nPanels;
+    var clippedKwh = clippedSum * 5 / 60 / 1000 * nPanels;
     if (n > 0) {
       fitStats[key] = {
         rmse: Math.round(Math.sqrt(sumSE / n)),
@@ -576,7 +576,7 @@ async function loadPanelOverlay(dateVal) {
         peakErr: Math.round(peakModel - peakActual),
         sunnyKwh: sunnyKwh,
         clippedKwh: clippedKwh,
-        lossKwh: clippedKwh - actualKwhPerPanel
+        lossKwh: clippedKwh - actualKwhSystem
       };
     }
   });
@@ -613,11 +613,11 @@ async function loadPanelOverlay(dateVal) {
     });
     // Actual row for reference
     sHtml += '<tr style="color:#f59e0b;font-weight:600;border-top:1px solid #475569">' +
-      '<td>Actual (per panel)</td><td colspan="3"></td>' +
+      '<td>Actual (' + nPanels + ' panels)</td><td colspan="3"></td>' +
       '<td style="border-left:1px solid #334155;padding-left:8px" colspan="2">' +
-        actualKwhPerPanel.toFixed(2) + ' kWh</td>' +
+        actualKwhSystem.toFixed(1) + '</td>' +
       '<td style="border-left:1px solid #334155;padding-left:8px;color:#94a3b8">' +
-        'system: ' + actualKwhSystem.toFixed(1) + ' kWh</td></tr>';
+        actualKwhPerPanel.toFixed(2) + ' kWh/panel</td></tr>';
     sHtml += '</table>';
     statsBox.innerHTML = sHtml;
     statsBox.style.display = '';
