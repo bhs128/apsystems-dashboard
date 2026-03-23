@@ -129,6 +129,18 @@
 </div>
 <div class="chart-box">
   <h3 style="color:#94a3b8;margin:0 0 0.25rem">Per-Panel Power Overlay (W)</h3>
+  <div id="modelControls" style="display:none;margin-bottom:0.5rem">
+    <div style="display:flex;flex-wrap:wrap;gap:0.5rem 1rem;align-items:center;font-size:0.75rem">
+      <span style="color:#64748b">Models:</span>
+      <label style="color:#e2e8f0;cursor:pointer"><input type="checkbox" class="model-cb" value="meinel_seasonal" checked> Meinel (seasonal k)</label>
+      <label style="color:#e2e8f0;cursor:pointer"><input type="checkbox" class="model-cb" value="meinel_clipped" checked> Clipped (320W)</label>
+      <label style="color:#e2e8f0;cursor:pointer"><input type="checkbox" class="model-cb" value="meinel_07"> Meinel (k=0.7)</label>
+      <label style="color:#e2e8f0;cursor:pointer;display:none" id="lbl_meinel_weather"><input type="checkbox" class="model-cb" value="meinel_weather"> Meinel (weather k)</label>
+      <label style="color:#e2e8f0;cursor:pointer;display:none" id="lbl_solcast_actual"><input type="checkbox" class="model-cb" value="solcast_actual" checked> Solcast actual</label>
+      <label style="color:#e2e8f0;cursor:pointer;display:none" id="lbl_solcast_forecast"><input type="checkbox" class="model-cb" value="solcast_forecast"> Solcast forecast</label>
+    </div>
+  </div>
+  <div id="modelFitStats" style="display:none;margin-bottom:0.5rem"></div>
   <div style="position:relative;min-height:120px">
     <div class="loading" id="panelOverlayLoading" style="display:flex;position:absolute;inset:0;z-index:2;background:#1e293b;align-items:center;justify-content:center">Loading ...</div>
     <canvas id="panelOverlayChart"></canvas>
@@ -342,21 +354,37 @@ async function loadPanelOverlay(dateVal) {
   if (!dateVal) dateVal = document.getElementById('sliderDayPick').value;
   if (!dateVal) return;
   document.getElementById('panelOverlayLoading').style.display = 'flex';
-  var results = await Promise.all([
+
+  // Fetch panel data, arrays, weather, and Solcast in parallel
+  var fetches = [
     get('/api/panel_wide?date=' + dateVal),
-    get('/api/arrays')
-  ]);
+    get('/api/arrays'),
+    get('/api/weather_daily?date=' + dateVal).catch(function() { return []; }),
+    get('/api/solcast_estimates?date=' + dateVal + '&type=actual').catch(function() { return []; }),
+    get('/api/solcast_estimates?date=' + dateVal + '&type=forecast').catch(function() { return []; })
+  ];
+  var results = await Promise.all(fetches);
   var data = results[0];
   var arrays = results[1];
+  var weatherRows = results[2];
+  var solcastActual = results[3];
+  var solcastForecast = results[4];
   document.getElementById('panelOverlayLoading').style.display = 'none';
   if (panelOverlayObj) panelOverlayObj.destroy();
   if (!data.length) {
     panelOverlayObj = null;
+    document.getElementById('modelControls').style.display = 'none';
+    document.getElementById('modelFitStats').style.display = 'none';
     toast('No panel data for ' + dateVal, false);
     return;
   }
+
+  // Panel columns
   var cols = Object.keys(data[0]).filter(function(k) { return k !== 'timestamp' && k !== 'total'; });
   cols.sort();
+  var nPanels = cols.length || 20;
+
+  // Panel trace datasets
   var datasets = cols.map(function(col, i) {
     return {
       label: col,
@@ -365,32 +393,222 @@ async function loadPanelOverlay(dateVal) {
       borderWidth: 1.5,
       pointRadius: 0,
       tension: 0.3,
-      fill: false
+      fill: false,
+      _isPanel: true
     };
   });
 
-  // Ideal clear-sky curve (no inverter cap)
+  // Mean actual per-panel power (for fit evaluation)
+  var meanActual = data.map(function(r) {
+    var sum = 0;
+    cols.forEach(function(c) { sum += (r[c] || 0); });
+    return sum / nPanels;
+  });
+
+  // --- Array orientation ---
   var LAT = 43.09, LON = -88.33;
-  var tilt = 39.8, panelAz = 180, panelW = 410; // defaults
+  var tilt = 39.8, panelAz = 180, panelW = 410;
   if (arrays && arrays.length) {
-    var a = arrays[0]; // use first array's orientation
+    var a = arrays[0];
     if (a.tilt_deg != null) tilt = a.tilt_deg;
     if (a.azimuth_deg != null) panelAz = a.azimuth_deg;
   }
-  var idealData = data.map(function(r) {
-    var hm = r.timestamp.slice(11, 16).split(':');
-    var h = parseInt(hm[0]) + parseInt(hm[1]) / 60;
-    return Math.round(clearSkyPanelPower(dateVal, h, LAT, LON, tilt, panelAz, panelW));
+
+  // --- NSRDB monthly k table ---
+  var monthlyK = [0, 0.824, 0.816, 0.798, 0.762, 0.741, 0.734,
+                     0.714, 0.722, 0.754, 0.784, 0.821, 0.816];
+  var month = parseInt(dateVal.slice(5, 7));
+  var kSeasonal = monthlyK[month] || 0.76;
+
+  // --- Weather-based k (from PWV) ---
+  var hasWeather = weatherRows && weatherRows.length > 0;
+  var kWeather = null;
+  if (hasWeather) {
+    var w = weatherRows[0];
+    if (w.pwv_mm != null && w.pwv_mm > 0) {
+      // Empirical PWV → k mapping (fitted to NSRDB data)
+      // Higher PWV = more absorption = lower k
+      kWeather = Math.max(0.55, Math.min(0.88, 0.86 - 0.005 * w.pwv_mm));
+    }
+  }
+
+  // --- Solcast data interpolation helper ---
+  function solcastToPerPanel(solcastRows) {
+    if (!solcastRows || !solcastRows.length) return null;
+    // Build time→kW lookup (HH:MM → kW)
+    var lookup = {};
+    solcastRows.forEach(function(r) {
+      var hm = (r.timestamp || '').slice(11, 16);
+      lookup[hm] = { pv: r.pv_estimate || 0, p10: r.pv_estimate10 || 0, p90: r.pv_estimate90 || 0 };
+    });
+    // Sort Solcast times for interpolation
+    var sTimes = Object.keys(lookup).sort();
+    function toMin(hm) { var p = hm.split(':'); return parseInt(p[0]) * 60 + parseInt(p[1]); }
+    function interpField(field, targetMin) {
+      // Find surrounding Solcast points and linearly interpolate
+      var before = null, after = null;
+      for (var i = 0; i < sTimes.length; i++) {
+        var m = toMin(sTimes[i]);
+        if (m <= targetMin) before = { m: m, v: lookup[sTimes[i]][field] };
+        if (m >= targetMin && !after) after = { m: m, v: lookup[sTimes[i]][field] };
+      }
+      if (before && after) {
+        if (before.m === after.m) return before.v;
+        var frac = (targetMin - before.m) / (after.m - before.m);
+        return before.v + frac * (after.v - before.v);
+      }
+      return before ? before.v : (after ? after.v : 0);
+    }
+    // Map to each data timestamp, convert system kW → per-panel W
+    return data.map(function(r) {
+      var hm = r.timestamp.slice(11, 16);
+      var tMin = toMin(hm);
+      var kw = interpField('pv', tMin);
+      return Math.round(kw * 1000 / nPanels);
+    });
+  }
+
+  // --- Build model curves ---
+  var CLIP_W = 320; // DS3-S per-channel clip
+  var modelDefs = {
+    meinel_07: {
+      label: 'Meinel (k=0.7)',
+      color: '#ffffff', dash: [6, 3], width: 1.5,
+      data: data.map(function(r) {
+        var hm = r.timestamp.slice(11, 16).split(':');
+        var h = parseInt(hm[0]) + parseInt(hm[1]) / 60;
+        return Math.round(clearSkyPanelPowerK(dateVal, h, LAT, LON, tilt, panelAz, panelW, 0.7));
+      })
+    },
+    meinel_seasonal: {
+      label: 'Meinel (k=' + kSeasonal.toFixed(3) + ')',
+      color: '#38bdf8', dash: [6, 3], width: 2,
+      data: data.map(function(r) {
+        var hm = r.timestamp.slice(11, 16).split(':');
+        var h = parseInt(hm[0]) + parseInt(hm[1]) / 60;
+        return Math.round(clearSkyPanelPowerK(dateVal, h, LAT, LON, tilt, panelAz, panelW, kSeasonal));
+      })
+    },
+    meinel_clipped: {
+      label: 'Clipped (' + CLIP_W + 'W, k=' + kSeasonal.toFixed(3) + ')',
+      color: '#a78bfa', dash: [4, 4], width: 2,
+      data: data.map(function(r) {
+        var hm = r.timestamp.slice(11, 16).split(':');
+        var h = parseInt(hm[0]) + parseInt(hm[1]) / 60;
+        var pw = clearSkyPanelPowerK(dateVal, h, LAT, LON, tilt, panelAz, panelW, kSeasonal);
+        return Math.round(Math.min(pw, CLIP_W));
+      })
+    }
+  };
+  if (kWeather != null) {
+    modelDefs.meinel_weather = {
+      label: 'Meinel (weather k=' + kWeather.toFixed(3) + ')',
+      color: '#fb923c', dash: [6, 3], width: 2,
+      data: data.map(function(r) {
+        var hm = r.timestamp.slice(11, 16).split(':');
+        var h = parseInt(hm[0]) + parseInt(hm[1]) / 60;
+        return Math.round(clearSkyPanelPowerK(dateVal, h, LAT, LON, tilt, panelAz, panelW, kWeather));
+      })
+    };
+  }
+  var solActData = solcastToPerPanel(solcastActual);
+  if (solActData) {
+    modelDefs.solcast_actual = {
+      label: 'Solcast actual',
+      color: '#22c55e', dash: [], width: 2.5,
+      data: solActData
+    };
+  }
+  var solFcData = solcastToPerPanel(solcastForecast);
+  if (solFcData) {
+    modelDefs.solcast_forecast = {
+      label: 'Solcast forecast',
+      color: '#facc15', dash: [8, 4], width: 2,
+      data: solFcData
+    };
+  }
+
+  // --- Show/hide model checkboxes based on availability ---
+  document.getElementById('modelControls').style.display = '';
+  document.getElementById('lbl_meinel_weather').style.display = kWeather != null ? '' : 'none';
+  document.getElementById('lbl_solcast_actual').style.display = solActData ? '' : 'none';
+  document.getElementById('lbl_solcast_forecast').style.display = solFcData ? '' : 'none';
+
+  // --- Get checked models ---
+  var checkedModels = {};
+  document.querySelectorAll('.model-cb').forEach(function(cb) {
+    checkedModels[cb.value] = cb.checked;
   });
-  datasets.push({
-    label: 'Ideal 410W (clear sky)',
-    data: idealData,
-    borderColor: '#ffffff',
-    borderWidth: 2,
-    borderDash: [6, 3],
-    pointRadius: 0,
-    tension: 0.3,
-    fill: false
+
+  // --- Compute fit statistics for each model vs mean actual ---
+  var fitStats = {};
+  var hasDaylight = meanActual.some(function(v) { return v > 10; });
+  Object.keys(modelDefs).forEach(function(key) {
+    var md = modelDefs[key];
+    var n = 0, sumSE = 0, sumAE = 0, peakModel = 0, peakActual = 0;
+    for (var i = 0; i < meanActual.length; i++) {
+      if (meanActual[i] < 5 && md.data[i] < 5) continue; // skip night
+      var err = md.data[i] - meanActual[i];
+      sumSE += err * err;
+      sumAE += Math.abs(err);
+      if (md.data[i] > peakModel) peakModel = md.data[i];
+      if (meanActual[i] > peakActual) peakActual = meanActual[i];
+      n++;
+    }
+    if (n > 0) {
+      fitStats[key] = {
+        rmse: Math.round(Math.sqrt(sumSE / n)),
+        mae: Math.round(sumAE / n),
+        peakModel: Math.round(peakModel),
+        peakActual: Math.round(peakActual),
+        peakErr: Math.round(peakModel - peakActual)
+      };
+    }
+  });
+
+  // --- Render fit stats table ---
+  var statsBox = document.getElementById('modelFitStats');
+  if (hasDaylight && Object.keys(fitStats).length > 0) {
+    // Find best model by RMSE
+    var bestKey = null, bestRmse = Infinity;
+    Object.keys(fitStats).forEach(function(k) {
+      if (fitStats[k].rmse < bestRmse) { bestRmse = fitStats[k].rmse; bestKey = k; }
+    });
+    var sHtml = '<table style="font-size:0.7rem;width:auto"><tr><th style="color:#94a3b8">Model</th>' +
+      '<th style="color:#94a3b8">RMSE</th><th style="color:#94a3b8">MAE</th>' +
+      '<th style="color:#94a3b8">Peak &Delta;</th></tr>';
+    Object.keys(modelDefs).forEach(function(key) {
+      if (!fitStats[key]) return;
+      var s = fitStats[key];
+      var isBest = (key === bestKey);
+      var rowStyle = isBest ? 'color:#22c55e;font-weight:600' : 'color:#e2e8f0';
+      var badge = isBest ? ' <span style="background:#22c55e22;color:#22c55e;padding:1px 6px;border-radius:3px;font-size:0.6rem">best</span>' : '';
+      sHtml += '<tr style="' + rowStyle + '"><td>' + modelDefs[key].label + badge + '</td>' +
+        '<td>' + s.rmse + ' W</td><td>' + s.mae + ' W</td>' +
+        '<td>' + (s.peakErr > 0 ? '+' : '') + s.peakErr + ' W</td></tr>';
+    });
+    sHtml += '</table>';
+    statsBox.innerHTML = sHtml;
+    statsBox.style.display = '';
+  } else {
+    statsBox.style.display = 'none';
+  }
+
+  // --- Add checked model datasets ---
+  Object.keys(modelDefs).forEach(function(key) {
+    if (!checkedModels[key]) return;
+    var md = modelDefs[key];
+    datasets.push({
+      label: md.label,
+      data: md.data,
+      borderColor: md.color,
+      borderWidth: md.width,
+      borderDash: md.dash,
+      pointRadius: 0,
+      tension: 0.3,
+      fill: false,
+      _isPanel: false
+    });
   });
 
   panelOverlayObj = new Chart(document.getElementById('panelOverlayChart'), {
@@ -401,7 +619,12 @@ async function loadPanelOverlay(dateVal) {
     },
     options: Object.assign({}, chartOpts, {
       plugins: { legend: { display: true, position: 'bottom',
-                 labels: { color: '#94a3b8', boxWidth: 12, font: { size: 10 } } } },
+                 labels: { color: '#94a3b8', boxWidth: 12, font: { size: 10 },
+                   filter: function(item, chart) {
+                     // Only show model lines in legend, not individual panels
+                     return !chart.datasets[item.datasetIndex]._isPanel;
+                   }
+                 } } },
       scales: Object.assign({}, chartOpts.scales, {
         y: { ticks: { color: '#64748b' }, grid: { color: '#334155' },
              title: { display: true, text: 'Watts', color: '#64748b' } }
@@ -409,8 +632,24 @@ async function loadPanelOverlay(dateVal) {
     }),
     plugins: [sliderLinePlugin]
   });
+
+  // Store model defs and data globally so checkbox changes can rebuild
+  panelOverlayObj._modelDefs = modelDefs;
+  panelOverlayObj._panelData = data;
+  panelOverlayObj._panelCols = cols;
+  panelOverlayObj._dateVal = dateVal;
+  panelOverlayObj._meanActual = meanActual;
+  panelOverlayObj._fitStats = fitStats;
+
   updateOverlayLine();
 }
+
+// Rebuild overlay when model checkboxes change
+document.addEventListener('change', function(e) {
+  if (e.target.classList.contains('model-cb') && panelOverlayObj && panelOverlayObj._dateVal) {
+    loadPanelOverlay(panelOverlayObj._dateVal);
+  }
+});
 
 function updateOverlayLine() {
   if (!panelOverlayObj) return;
@@ -760,29 +999,45 @@ function solarElevation(dateStr, localHour, lat, lon) {
 }
 
 // Clear-sky power for a tilted panel (W) — no inverter clipping
+// Includes ground-reflected irradiance, improved diffuse, and panel temp correction
 function clearSkyPanelPower(dateStr, localHour, lat, lon, tiltDeg, azDeg, capacityW) {
+  return clearSkyPanelPowerK(dateStr, localHour, lat, lon, tiltDeg, azDeg, capacityW, 0.7);
+}
+
+// Parameterized version: accepts atmospheric extinction coefficient k
+function clearSkyPanelPowerK(dateStr, localHour, lat, lon, tiltDeg, azDeg, capacityW, k) {
   var sun = solarPosition(dateStr, localHour, lat, lon);
   if (sun.elevation <= 0) return 0;
   var elevR = sun.elevation * Math.PI / 180;
   var azR = sun.azimuth * Math.PI / 180;
   var tiltR = tiltDeg * Math.PI / 180;
   var panelAzR = azDeg * Math.PI / 180;
-  // Air mass (Kasten & Young, 1989 simplified)
+  // Air mass (Kasten & Young, 1989)
   var am = 1 / (Math.sin(elevR) + 0.50572 * Math.pow(sun.elevation + 6.07995, -1.6364));
-  // Clear-sky DNI (Meinel model)
-  var dni = 1361 * Math.pow(0.7, Math.pow(am, 0.678));
+  // Clear-sky DNI (Meinel model with tunable k)
+  var dni = 1361 * Math.pow(k, Math.pow(am, 0.678));
   // Angle of incidence on tilted surface
   var cosAOI = Math.sin(elevR) * Math.cos(tiltR) +
                Math.cos(elevR) * Math.sin(tiltR) * Math.cos(azR - panelAzR);
   if (cosAOI < 0) cosAOI = 0;
   var beam = dni * cosAOI;
-  // Simple isotropic diffuse (Liu & Jordan)
-  var dhi = 120 * Math.sin(elevR); // rough clear-sky diffuse
+  // Diffuse horizontal irradiance — improved for low sun angles
+  var dhi = 40 + 80 * Math.sin(elevR);
   var diffuse = dhi * (1 + Math.cos(tiltR)) / 2;
+  // Ground-reflected irradiance (isotropic, albedo 0.2)
+  var ghi = dni * Math.sin(elevR) + dhi;
+  var groundReflected = ghi * 0.2 * (1 - Math.cos(tiltR)) / 2;
   // Total POA irradiance
-  var poa = beam + diffuse;
+  var poa = beam + diffuse + groundReflected;
   // Scale by panel STC rating (STC = 1000 W/m²)
-  return poa / 1000 * capacityW;
+  var stcPower = poa / 1000 * capacityW;
+  // Panel temperature correction (-0.40%/°C above 25°C STC)
+  var parts = dateStr.split('-');
+  var doy = Math.floor((new Date(parts[0], parts[1]-1, parts[2]) - new Date(parts[0], 0, 1)) / 86400000) + 1;
+  var ambientC = 10 + 15 * Math.sin((doy - 80) * 2 * Math.PI / 365);
+  var panelTempC = ambientC + poa * 0.03;
+  var tempFactor = 1.0 + (panelTempC - 25) * (-0.0040);
+  return stcPower * tempFactor;
 }
 
 // ---- Interactive time-slider array ----

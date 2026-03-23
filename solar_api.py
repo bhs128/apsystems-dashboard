@@ -307,6 +307,29 @@ def api_slot_history():
     return jsonify(json.loads(df.to_json(orient='records')))
 
 
+@app.route('/api/weather_daily')
+def api_weather_daily():
+    """Daily weather + atmospheric data."""
+    start, end = date_params()
+    date = request.args.get('date')
+    if date:
+        start = end = date
+    df = db.get_weather_daily(start_date=start, end_date=end)
+    return jsonify(df_to_json(df))
+
+
+@app.route('/api/solcast_estimates')
+def api_solcast_estimates():
+    """Solcast PV forecast and estimated actuals."""
+    start, end = date_params()
+    date = request.args.get('date')
+    if date:
+        start = end = date
+    est_type = request.args.get('type')
+    df = db.get_solcast_estimates(start_date=start, end_date=end, est_type=est_type)
+    return jsonify(df_to_json(df))
+
+
 @app.route('/api/system_summary')
 def api_system_summary():
     """Live summary from EMA API: today/month/year/lifetime kWh."""
