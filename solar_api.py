@@ -69,6 +69,11 @@ def index():
     return send_from_directory(SERVICE_DIR, 'solar_dashboard.html')
 
 
+@app.route('/field')
+def field_log():
+    return send_from_directory(SERVICE_DIR, 'solar_field_log.html')
+
+
 @app.route('/api/status')
 def api_status():
     tables = ['system_readings', 'daily_energy', 'panel_readings',

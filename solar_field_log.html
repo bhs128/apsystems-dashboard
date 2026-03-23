@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solar Field Logger — Fluke IRR1-SOL</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #0f172a; color: #e2e8f0; padding: 1rem; max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; color: #f59e0b; margin-bottom: 0.25rem; }
+  h2 { font-size: 1.1rem; color: #cbd5e1; margin-bottom: 0.75rem; }
+  h3 { font-size: 0.9rem; color: #f59e0b; margin-bottom: 0.5rem; }
+  .subtitle { color: #94a3b8; font-size: 0.8rem; margin-bottom: 1.5rem; }
+  .box { background: #1e293b; border-radius: 0.75rem; padding: 1rem; margin-bottom: 1rem; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
+  label { display: block; font-size: 0.75rem; color: #94a3b8; margin-bottom: 0.2rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  input, select, textarea { background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+    padding: 0.4rem 0.6rem; border-radius: 0.4rem; font-size: 0.85rem; width: 100%; margin-bottom: 0.5rem; }
+  input:focus, select:focus { border-color: #f59e0b; outline: none; }
+  .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+  .field-row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; }
+  .field-row4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.5rem; }
+  button { border: none; padding: 0.45rem 1rem; border-radius: 0.4rem; cursor: pointer;
+           font-weight: 600; font-size: 0.8rem; }
+  .btn-primary { background: #f59e0b; color: #0f172a; }
+  .btn-primary:hover { background: #d97706; }
+  .btn-green { background: #22c55e; color: #0f172a; }
+  .btn-green:hover { background: #16a34a; }
+  .btn-red { background: #ef4444; color: #fff; }
+  .btn-red:hover { background: #dc2626; }
+  .btn-sm { padding: 0.25rem 0.6rem; font-size: 0.7rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+  th, td { padding: 0.35rem 0.5rem; text-align: left; border-bottom: 1px solid #334155; }
+  th { color: #94a3b8; font-weight: 600; font-size: 0.7rem; }
+  .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 0.6rem; font-weight: 600; }
+  .result-box { background: #0f172a; border: 1px solid #334155; border-radius: 0.5rem;
+                padding: 0.75rem; margin-top: 0.5rem; }
+  .stat { display: inline-block; margin-right: 1.5rem; margin-bottom: 0.25rem; }
+  .stat .lbl { font-size: 0.65rem; color: #64748b; text-transform: uppercase; }
+  .stat .val { font-size: 1.1rem; font-weight: 700; color: #f8fafc; }
+  .stat .val.good { color: #22c55e; }
+  .stat .val.warn { color: #f59e0b; }
+  .stat .val.bad { color: #ef4444; }
+  .help { font-size: 0.7rem; color: #64748b; margin-top: 0.2rem; }
+  .toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: #22c55e;
+           color: #0f172a; padding: 0.5rem 1rem; border-radius: 0.5rem;
+           font-weight: 600; font-size: 0.8rem; opacity: 0; transition: opacity 0.3s; z-index: 99; }
+  .toast.show { opacity: 1; }
+  canvas { max-height: 250px; }
+  .collapsible { cursor: pointer; user-select: none; }
+  .collapsible::before { content: '▸ '; color: #f59e0b; }
+  .collapsible.open::before { content: '▾ '; }
+  .tab-bar { display: flex; gap: 0; margin-bottom: -1px; }
+  .tab { padding: 0.4rem 1rem; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+         border: 1px solid #334155; border-bottom: none; border-radius: 0.5rem 0.5rem 0 0;
+         color: #64748b; background: #0f172a; }
+  .tab.active { color: #f59e0b; background: #1e293b; border-color: #475569; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+</style>
+</head>
+<body>
+
+<h1>&#9728; Solar Field Logger</h1>
+<p class="subtitle">Fluke IRR1-SOL irradiance measurements &amp; production analysis &mdash; standalone, no server required</p>
+
+<!-- Site Configuration -->
+<div class="box">
+  <h3 class="collapsible open" onclick="toggle(this, 'siteConfig')">Site Configuration</h3>
+  <div id="siteConfig">
+    <div class="field-row3">
+      <div><label>Latitude (&deg;N)</label><input type="number" id="cfgLat" step="0.01" placeholder="43.09"></div>
+      <div><label>Longitude (&deg;W as negative)</label><input type="number" id="cfgLon" step="0.01" placeholder="-88.33"></div>
+      <div><label>Altitude (m)</label><input type="number" id="cfgAlt" step="1" placeholder="260"></div>
+    </div>
+    <div class="field-row4">
+      <div><label>Panel Tilt (&deg;)</label><input type="number" id="cfgTilt" step="0.1" placeholder="39.8"></div>
+      <div><label>Panel Azimuth (&deg;)</label><input type="number" id="cfgAz" step="0.1" placeholder="180"></div>
+      <div><label>Panel Pmax (W)</label><input type="number" id="cfgPmax" step="1" placeholder="410"></div>
+      <div><label>Temp Coeff (%/&deg;C)</label><input type="number" id="cfgTempCoeff" step="0.001" placeholder="-0.365"></div>
+    </div>
+    <div class="field-row3">
+      <div><label>Num Panels</label><input type="number" id="cfgNPanels" step="1" placeholder="20"></div>
+      <div><label>Inverter Clip per Ch (W)</label><input type="number" id="cfgClipW" step="1" placeholder="320"></div>
+      <div><label>Site Name</label><input type="text" id="cfgSiteName" placeholder="My Solar Array"></div>
+    </div>
+    <button class="btn-primary" onclick="saveSiteConfig()">Save Site Config</button>
+    <span id="cfgStatus" style="font-size:0.7rem;color:#22c55e;margin-left:0.5rem"></span>
+  </div>
+</div>
+
+<!-- Tabs: New Entry / Log / Analysis -->
+<div class="tab-bar">
+  <div class="tab active" onclick="switchTab('entry')">New Measurement</div>
+  <div class="tab" onclick="switchTab('log')">Measurement Log</div>
+  <div class="tab" onclick="switchTab('analysis')">Analysis</div>
+</div>
+
+<!-- Tab 1: New Entry -->
+<div class="box tab-content active" id="tab-entry" style="border-radius: 0 0.75rem 0.75rem 0.75rem">
+  <h3>Log a Fluke IRR1-SOL Reading</h3>
+  <p class="help" style="margin-bottom:0.75rem">
+    Take a measurement with the Fluke IRR1-SOL. If matching to the panel tilt, orient the meter
+    at the same tilt/azimuth. Log the reading along with actual inverter output to build your model.
+  </p>
+
+  <div class="field-row">
+    <div><label>Date &amp; Time</label><input type="datetime-local" id="entryDT"></div>
+    <div>
+      <label>Measurement Type</label>
+      <select id="entryType">
+        <option value="poa">POA (Plane of Array) &mdash; meter at panel tilt</option>
+        <option value="ghi">GHI (Global Horizontal) &mdash; meter flat</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="field-row3">
+    <div><label>Irradiance (W/m&sup2;)</label><input type="number" id="entryIrr" step="1" placeholder="850"></div>
+    <div><label>Actual System Power (W)</label><input type="number" id="entryPowerW" step="1" placeholder="6200">
+      <p class="help">Instantaneous inverter output at time of reading</p></div>
+    <div><label>Ambient Temp (&deg;C)</label><input type="number" id="entryTempC" step="0.1" placeholder="25">
+      <p class="help">Optional: air temp at measurement time</p></div>
+  </div>
+
+  <div class="field-row3">
+    <div><label>Humidity (%)</label><input type="number" id="entryRH" step="1" placeholder="50"></div>
+    <div><label>PM2.5 (&micro;g/m&sup3;)</label><input type="number" id="entryPM25" step="0.1" placeholder=""></div>
+    <div><label>Notes</label><input type="text" id="entryNotes" placeholder="Clear sky, no shade"></div>
+  </div>
+
+  <div style="margin-top:0.5rem">
+    <button class="btn-green" onclick="logMeasurement()">Log Measurement &amp; Calculate</button>
+  </div>
+
+  <!-- Instant result after logging -->
+  <div id="instantResult" style="display:none" class="result-box">
+    <h3 style="margin-bottom:0.5rem">Measurement Result</h3>
+    <div id="instantResultBody"></div>
+  </div>
+</div>
+
+<!-- Tab 2: Measurement Log -->
+<div class="box tab-content" id="tab-log" style="border-radius: 0 0.75rem 0.75rem 0.75rem">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+    <h3 style="margin:0">Measurement Log</h3>
+    <div>
+      <button class="btn-primary btn-sm" onclick="exportCSV()">Export CSV</button>
+      <button class="btn-red btn-sm" onclick="clearAllData()" style="margin-left:0.25rem">Clear All</button>
+    </div>
+  </div>
+  <div style="overflow-x:auto">
+    <table id="logTable">
+      <thead>
+        <tr>
+          <th>Date/Time</th><th>Type</th><th>Irr (W/m&sup2;)</th><th>Actual (W)</th>
+          <th>Expected (W)</th><th>Ratio</th><th>k<sub>eff</sub></th>
+          <th>Temp &deg;C</th><th>Notes</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="logBody"></tbody>
+    </table>
+  </div>
+  <p id="logEmpty" class="help" style="text-align:center;padding:1rem">No measurements logged yet</p>
+</div>
+
+<!-- Tab 3: Analysis -->
+<div class="box tab-content" id="tab-analysis" style="border-radius: 0 0.75rem 0.75rem 0.75rem">
+  <h3>Site Performance Analysis</h3>
+  <div id="analysisEmpty" class="help" style="text-align:center;padding:1rem">
+    Log at least 3 measurements to see analysis
+  </div>
+  <div id="analysisContent" style="display:none">
+    <div id="analysisSummary" style="margin-bottom:1rem"></div>
+    <div class="row">
+      <div><canvas id="ratioChart"></canvas></div>
+      <div><canvas id="kEffChart"></canvas></div>
+    </div>
+    <div class="row" style="margin-top:1rem">
+      <div><canvas id="irrVsPowerChart"></canvas></div>
+      <div><canvas id="residualChart"></canvas></div>
+    </div>
+    <div id="modelSummary" class="result-box" style="margin-top:1rem"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+//  Storage keys
+// ============================================================
+var SITE_KEY = 'solar_field_site';
+var LOG_KEY = 'solar_field_log';
+
+function loadSite() {
+  try { return JSON.parse(localStorage.getItem(SITE_KEY)) || {}; } catch(e) { return {}; }
+}
+function saveSite(s) { localStorage.setItem(SITE_KEY, JSON.stringify(s)); }
+function loadLog() {
+  try { return JSON.parse(localStorage.getItem(LOG_KEY)) || []; } catch(e) { return []; }
+}
+function saveLog(arr) { localStorage.setItem(LOG_KEY, JSON.stringify(arr)); }
+
+// ============================================================
+//  UI helpers
+// ============================================================
+function toast(msg, ok) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.background = ok ? '#22c55e' : '#ef4444';
+  el.classList.add('show');
+  setTimeout(function() { el.classList.remove('show'); }, 2500);
+}
+
+function toggle(el, id) {
+  var box = document.getElementById(id);
+  el.classList.toggle('open');
+  box.style.display = el.classList.contains('open') ? '' : 'none';
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(function(t, i) {
+    var tabName = ['entry','log','analysis'][i];
+    t.classList.toggle('active', tabName === name);
+  });
+  document.querySelectorAll('.tab-content').forEach(function(c) {
+    c.classList.toggle('active', c.id === 'tab-' + name);
+  });
+  if (name === 'log') renderLog();
+  if (name === 'analysis') renderAnalysis();
+}
+
+// ============================================================
+//  Site config
+// ============================================================
+function populateSiteConfig() {
+  var s = loadSite();
+  document.getElementById('cfgLat').value = s.lat || '';
+  document.getElementById('cfgLon').value = s.lon || '';
+  document.getElementById('cfgAlt').value = s.alt || '';
+  document.getElementById('cfgTilt').value = s.tilt || '';
+  document.getElementById('cfgAz').value = s.az || '';
+  document.getElementById('cfgPmax').value = s.pmax || '';
+  document.getElementById('cfgTempCoeff').value = s.tempCoeff || '';
+  document.getElementById('cfgNPanels').value = s.nPanels || '';
+  document.getElementById('cfgClipW').value = s.clipW || '';
+  document.getElementById('cfgSiteName').value = s.siteName || '';
+}
+
+function saveSiteConfig() {
+  var s = {
+    lat: parseFloat(document.getElementById('cfgLat').value),
+    lon: parseFloat(document.getElementById('cfgLon').value),
+    alt: parseFloat(document.getElementById('cfgAlt').value) || 0,
+    tilt: parseFloat(document.getElementById('cfgTilt').value),
+    az: parseFloat(document.getElementById('cfgAz').value),
+    pmax: parseFloat(document.getElementById('cfgPmax').value),
+    tempCoeff: parseFloat(document.getElementById('cfgTempCoeff').value) || -0.365,
+    nPanels: parseInt(document.getElementById('cfgNPanels').value) || 1,
+    clipW: parseFloat(document.getElementById('cfgClipW').value) || 9999,
+    siteName: document.getElementById('cfgSiteName').value || 'My Array'
+  };
+  if (isNaN(s.lat) || isNaN(s.lon) || isNaN(s.tilt) || isNaN(s.az) || isNaN(s.pmax)) {
+    toast('Fill in required site fields', false);
+    return;
+  }
+  saveSite(s);
+  document.getElementById('cfgStatus').textContent = 'Saved ✓';
+  setTimeout(function() { document.getElementById('cfgStatus').textContent = ''; }, 2000);
+  toast('Site config saved', true);
+}
+
+// ============================================================
+//  Solar position (standalone Meinel model)
+// ============================================================
+function solarPosition(dateStr, localHourDecimal, lat, lon) {
+  var parts = dateStr.split('-');
+  var year = parseInt(parts[0]), month = parseInt(parts[1]), day = parseInt(parts[2]);
+  var doy = Math.floor((new Date(year, month - 1, day) - new Date(year, 0, 1)) / 86400000) + 1;
+  var B = (360 / 365) * (doy - 81) * Math.PI / 180;
+  var EoT = 9.87 * Math.sin(2 * B) - 7.53 * Math.cos(B) - 1.5 * Math.sin(B);
+  var LSTM = Math.round(lon / 15) * 15;
+  var TC = 4 * (lon - LSTM) + EoT;
+  var LST = localHourDecimal + TC / 60;
+  var HRA = (LST - 12) * 15;
+  var declR = 23.45 * Math.sin((360 / 365) * (doy - 81) * Math.PI / 180) * Math.PI / 180;
+  var latR = lat * Math.PI / 180;
+  var hraR = HRA * Math.PI / 180;
+  var sinElev = Math.sin(latR) * Math.sin(declR) + Math.cos(latR) * Math.cos(declR) * Math.cos(hraR);
+  var elevation = Math.asin(sinElev) * 180 / Math.PI;
+  var cosAz = (Math.sin(declR) - Math.sin(latR) * sinElev) / (Math.cos(latR) * Math.cos(elevation * Math.PI / 180));
+  cosAz = Math.max(-1, Math.min(1, cosAz));
+  var azimuth = Math.acos(cosAz) * 180 / Math.PI;
+  if (HRA > 0) azimuth = 360 - azimuth;
+  return { elevation: elevation, azimuth: azimuth };
+}
+
+function clearSkyPOA(dateStr, localHour, lat, lon, tiltDeg, azDeg, k) {
+  var sun = solarPosition(dateStr, localHour, lat, lon);
+  if (sun.elevation <= 0) return { poa: 0, dni: 0, elevation: sun.elevation };
+  var elevR = sun.elevation * Math.PI / 180;
+  var azR = sun.azimuth * Math.PI / 180;
+  var tiltR = tiltDeg * Math.PI / 180;
+  var panelAzR = azDeg * Math.PI / 180;
+  var am = 1 / (Math.sin(elevR) + 0.50572 * Math.pow(sun.elevation + 6.07995, -1.6364));
+  var dni = 1361 * Math.pow(k, Math.pow(am, 0.678));
+  var cosAOI = Math.sin(elevR) * Math.cos(tiltR) +
+               Math.cos(elevR) * Math.sin(tiltR) * Math.cos(azR - panelAzR);
+  if (cosAOI < 0) cosAOI = 0;
+  var beam = dni * cosAOI;
+  var dhi = 40 + 80 * Math.sin(elevR);
+  var diffuse = dhi * (1 + Math.cos(tiltR)) / 2;
+  var ghi = dni * Math.sin(elevR) + dhi;
+  var groundReflected = ghi * 0.2 * (1 - Math.cos(tiltR)) / 2;
+  var poa = beam + diffuse + groundReflected;
+  return { poa: poa, dni: dni, elevation: sun.elevation, am: am };
+}
+
+function expectedSystemPower(site, poa_wm2, ambientTempC) {
+  // Expected power from POA irradiance measurement
+  var stcPower = poa_wm2 / 1000 * site.pmax;
+  // Temperature correction
+  var tempC = ambientTempC != null ? ambientTempC : 25;
+  var panelTemp = tempC + poa_wm2 * 0.03; // NOCT approximation
+  var tempFactor = 1.0 + (panelTemp - 25) * (site.tempCoeff / 100);
+  var perPanel = stcPower * tempFactor;
+  var perPanelClipped = Math.min(perPanel, site.clipW);
+  var systemUnclipped = perPanel * site.nPanels;
+  var systemClipped = perPanelClipped * site.nPanels;
+  return {
+    perPanel: perPanel,
+    perPanelClipped: perPanelClipped,
+    systemUnclipped: systemUnclipped,
+    systemClipped: systemClipped,
+    tempFactor: tempFactor,
+    panelTemp: panelTemp
+  };
+}
+
+function solveKFromPOA(dateStr, localHour, lat, lon, tiltDeg, azDeg, measuredPOA) {
+  // Golden-section search to find k that makes model POA match measured POA
+  var a = 0.40, b = 0.98, gr = (Math.sqrt(5) + 1) / 2;
+  for (var iter = 0; iter < 40; iter++) {
+    var c = b - (b - a) / gr;
+    var d = a + (b - a) / gr;
+    var ec = Math.abs(clearSkyPOA(dateStr, localHour, lat, lon, tiltDeg, azDeg, c).poa - measuredPOA);
+    var ed = Math.abs(clearSkyPOA(dateStr, localHour, lat, lon, tiltDeg, azDeg, d).poa - measuredPOA);
+    if (ec < ed) b = d; else a = c;
+  }
+  return (a + b) / 2;
+}
+
+function poaFromGHI(dateStr, localHour, lat, lon, tiltDeg, azDeg, measuredGHI) {
+  // Approximate POA from GHI using the Perez-like decomposition
+  var sun = solarPosition(dateStr, localHour, lat, lon);
+  if (sun.elevation <= 2) return 0;
+  var elevR = sun.elevation * Math.PI / 180;
+  var azR = sun.azimuth * Math.PI / 180;
+  var tiltR = tiltDeg * Math.PI / 180;
+  var panelAzR = azDeg * Math.PI / 180;
+  // Simple decomposition: estimate DNI and DHI from GHI
+  var kt = measuredGHI / (1361 * Math.sin(elevR)); // clearness index
+  kt = Math.max(0, Math.min(1, kt));
+  var diffuseFrac = kt <= 0.22 ? 1.0 - 0.09 * kt :
+                    kt <= 0.80 ? 0.9511 - 0.1604 * kt + 4.388 * kt * kt - 16.638 * kt * kt * kt + 12.336 * kt * kt * kt * kt :
+                    0.165;
+  var dhi = measuredGHI * diffuseFrac;
+  var dni = (measuredGHI - dhi) / Math.sin(elevR);
+  if (dni < 0) dni = 0;
+  var cosAOI = Math.sin(elevR) * Math.cos(tiltR) +
+               Math.cos(elevR) * Math.sin(tiltR) * Math.cos(azR - panelAzR);
+  if (cosAOI < 0) cosAOI = 0;
+  var beam = dni * cosAOI;
+  var diffuse = dhi * (1 + Math.cos(tiltR)) / 2;
+  var groundReflected = measuredGHI * 0.2 * (1 - Math.cos(tiltR)) / 2;
+  return beam + diffuse + groundReflected;
+}
+
+// ============================================================
+//  Log measurement
+// ============================================================
+function logMeasurement() {
+  var site = loadSite();
+  if (!site.lat || !site.pmax) {
+    toast('Configure site first', false);
+    return;
+  }
+  var dt = document.getElementById('entryDT').value;
+  if (!dt) { toast('Enter date/time', false); return; }
+  var irr = parseFloat(document.getElementById('entryIrr').value);
+  if (isNaN(irr) || irr <= 0) { toast('Enter irradiance', false); return; }
+  var powerW = parseFloat(document.getElementById('entryPowerW').value);
+  var tempC = parseFloat(document.getElementById('entryTempC').value);
+  var rh = parseFloat(document.getElementById('entryRH').value);
+  var pm25 = parseFloat(document.getElementById('entryPM25').value);
+  var notes = document.getElementById('entryNotes').value;
+  var measType = document.getElementById('entryType').value;
+
+  // Parse datetime
+  var dateStr = dt.slice(0, 10);
+  var timeParts = dt.slice(11).split(':');
+  var localHour = parseInt(timeParts[0]) + parseInt(timeParts[1]) / 60;
+
+  // Compute POA from measurement
+  var poaIrr;
+  if (measType === 'poa') {
+    poaIrr = irr;
+  } else {
+    poaIrr = poaFromGHI(dateStr, localHour, site.lat, site.lon, site.tilt, site.az, irr);
+  }
+
+  // Clear-sky model POA for this moment (using seasonal k)
+  var monthlyK = [0, 0.824, 0.816, 0.798, 0.762, 0.741, 0.734,
+                     0.714, 0.722, 0.754, 0.784, 0.821, 0.816];
+  var month = parseInt(dateStr.slice(5, 7));
+  var kSeasonal = monthlyK[month] || 0.76;
+  var clearsky = clearSkyPOA(dateStr, localHour, site.lat, site.lon, site.tilt, site.az, kSeasonal);
+
+  // Solve for effective k from measurement
+  var kEff = null;
+  if (clearsky.elevation > 5 && poaIrr > 50) {
+    kEff = solveKFromPOA(dateStr, localHour, site.lat, site.lon, site.tilt, site.az, poaIrr);
+  }
+
+  // Expected power from measured irradiance
+  var expected = expectedSystemPower(site, poaIrr, isNaN(tempC) ? null : tempC);
+
+  // Performance ratio
+  var ratio = !isNaN(powerW) && expected.systemClipped > 0 ? powerW / expected.systemClipped : null;
+
+  var entry = {
+    id: Date.now(),
+    dt: dt,
+    dateStr: dateStr,
+    localHour: localHour,
+    measType: measType,
+    irrRaw: irr,
+    poaIrr: Math.round(poaIrr),
+    powerW: isNaN(powerW) ? null : powerW,
+    tempC: isNaN(tempC) ? null : tempC,
+    rh: isNaN(rh) ? null : rh,
+    pm25: isNaN(pm25) ? null : pm25,
+    notes: notes,
+    clearSkyPOA: Math.round(clearsky.poa),
+    elevation: Math.round(clearsky.elevation * 10) / 10,
+    kSeasonal: kSeasonal,
+    kEff: kEff != null ? Math.round(kEff * 1000) / 1000 : null,
+    expectedUnclipped: Math.round(expected.systemUnclipped),
+    expectedClipped: Math.round(expected.systemClipped),
+    ratio: ratio != null ? Math.round(ratio * 1000) / 1000 : null,
+    panelTemp: Math.round(expected.panelTemp * 10) / 10,
+    tempFactor: Math.round(expected.tempFactor * 1000) / 1000
+  };
+
+  var log = loadLog();
+  log.push(entry);
+  log.sort(function(a, b) { return a.dt < b.dt ? -1 : 1; });
+  saveLog(log);
+
+  // Show instant result
+  showInstantResult(entry, site);
+  toast('Measurement logged', true);
+}
+
+function showInstantResult(e, site) {
+  var box = document.getElementById('instantResult');
+  var body = document.getElementById('instantResultBody');
+  box.style.display = '';
+
+  var ratioClass = e.ratio == null ? '' : e.ratio >= 0.90 ? 'good' : e.ratio >= 0.75 ? 'warn' : 'bad';
+  var ratioText = e.ratio != null ? (e.ratio * 100).toFixed(1) + '%' : '—';
+
+  var html = '<div style="display:flex;flex-wrap:wrap;gap:0.25rem 0">';
+  html += '<div class="stat"><div class="lbl">Measured POA</div><div class="val">' + e.poaIrr + ' W/m²</div></div>';
+  html += '<div class="stat"><div class="lbl">Clear-Sky POA</div><div class="val">' + e.clearSkyPOA + ' W/m²</div></div>';
+  html += '<div class="stat"><div class="lbl">Sun Elevation</div><div class="val">' + e.elevation + '°</div></div>';
+  if (e.kEff != null) {
+    html += '<div class="stat"><div class="lbl">Effective k</div><div class="val warn">' + e.kEff.toFixed(3) + '</div></div>';
+    html += '<div class="stat"><div class="lbl">Seasonal k</div><div class="val">' + e.kSeasonal.toFixed(3) + '</div></div>';
+  }
+  html += '</div>';
+
+  if (e.powerW != null) {
+    html += '<div style="margin-top:0.5rem;display:flex;flex-wrap:wrap;gap:0.25rem 0">';
+    html += '<div class="stat"><div class="lbl">Actual Power</div><div class="val">' + e.powerW + ' W</div></div>';
+    html += '<div class="stat"><div class="lbl">Expected (clipped)</div><div class="val">' + e.expectedClipped + ' W</div></div>';
+    html += '<div class="stat"><div class="lbl">Expected (unclipped)</div><div class="val">' + e.expectedUnclipped + ' W</div></div>';
+    html += '<div class="stat"><div class="lbl">Performance Ratio</div><div class="val ' + ratioClass + '">' + ratioText + '</div></div>';
+    html += '<div class="stat"><div class="lbl">Panel Temp</div><div class="val">' + e.panelTemp + '°C</div></div>';
+    html += '</div>';
+
+    // Diagnosis
+    var diff = e.powerW - e.expectedClipped;
+    var pct = diff / e.expectedClipped * 100;
+    var diagColor = Math.abs(pct) < 5 ? '#22c55e' : Math.abs(pct) < 15 ? '#f59e0b' : '#ef4444';
+    html += '<p style="margin-top:0.5rem;font-size:0.75rem;color:' + diagColor + '">';
+    if (Math.abs(pct) < 5) {
+      html += '✓ Production matches irradiance well (' + (pct > 0 ? '+' : '') + pct.toFixed(1) + '%)';
+    } else if (pct < -5) {
+      html += '⚠ Producing ' + Math.abs(pct).toFixed(1) + '% below expected — check for shading, soiling, or degradation';
+    } else {
+      html += '△ Producing ' + pct.toFixed(1) + '% above expected — measurement may have been in partial shade or meter not perfectly aligned';
+    }
+    html += '</p>';
+  }
+
+  body.innerHTML = html;
+}
+
+// ============================================================
+//  Measurement log table
+// ============================================================
+function renderLog() {
+  var log = loadLog();
+  var tbody = document.getElementById('logBody');
+  var empty = document.getElementById('logEmpty');
+  if (!log.length) {
+    tbody.innerHTML = '';
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+  var html = '';
+  log.forEach(function(e) {
+    var ratioColor = e.ratio == null ? '#94a3b8' : e.ratio >= 0.90 ? '#22c55e' : e.ratio >= 0.75 ? '#f59e0b' : '#ef4444';
+    var ratioText = e.ratio != null ? (e.ratio * 100).toFixed(1) + '%' : '—';
+    var badge = e.measType === 'poa'
+      ? '<span class="badge" style="background:#38bdf822;color:#38bdf8">POA</span>'
+      : '<span class="badge" style="background:#fb923c22;color:#fb923c">GHI</span>';
+    html += '<tr>' +
+      '<td style="white-space:nowrap">' + e.dt.replace('T', ' ') + '</td>' +
+      '<td>' + badge + '</td>' +
+      '<td>' + e.poaIrr + '</td>' +
+      '<td>' + (e.powerW != null ? e.powerW : '—') + '</td>' +
+      '<td>' + e.expectedClipped + '</td>' +
+      '<td style="color:' + ratioColor + ';font-weight:600">' + ratioText + '</td>' +
+      '<td>' + (e.kEff != null ? e.kEff.toFixed(3) : '—') + '</td>' +
+      '<td>' + (e.tempC != null ? e.tempC : '—') + '</td>' +
+      '<td style="max-width:120px;overflow:hidden;text-overflow:ellipsis">' + (e.notes || '') + '</td>' +
+      '<td><button class="btn-red btn-sm" onclick="deleteEntry(' + e.id + ')">×</button></td>' +
+      '</tr>';
+  });
+  tbody.innerHTML = html;
+}
+
+function deleteEntry(id) {
+  var log = loadLog().filter(function(e) { return e.id !== id; });
+  saveLog(log);
+  renderLog();
+  toast('Entry deleted', true);
+}
+
+function clearAllData() {
+  if (!confirm('Delete ALL measurements? This cannot be undone.')) return;
+  saveLog([]);
+  renderLog();
+  toast('All data cleared', true);
+}
+
+function exportCSV() {
+  var log = loadLog();
+  if (!log.length) { toast('No data to export', false); return; }
+  var headers = ['datetime','type','irr_raw_wm2','poa_wm2','actual_W','expected_clipped_W',
+    'expected_unclipped_W','ratio','k_eff','k_seasonal','elevation','temp_C',
+    'rh_pct','pm25_ugm3','panel_temp_C','notes'];
+  var rows = [headers.join(',')];
+  log.forEach(function(e) {
+    rows.push([
+      e.dt, e.measType, e.irrRaw, e.poaIrr, e.powerW || '', e.expectedClipped,
+      e.expectedUnclipped, e.ratio || '', e.kEff || '', e.kSeasonal, e.elevation,
+      e.tempC || '', e.rh || '', e.pm25 || '', e.panelTemp, '"' + (e.notes || '').replace(/"/g, '""') + '"'
+    ].join(','));
+  });
+  var blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'solar_field_log.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ============================================================
+//  Analysis charts
+// ============================================================
+var ratioChartObj = null, kEffChartObj = null, irrVsPowerChartObj = null, residualChartObj = null;
+
+function renderAnalysis() {
+  var log = loadLog();
+  var withPower = log.filter(function(e) { return e.powerW != null && e.ratio != null; });
+  var withK = log.filter(function(e) { return e.kEff != null; });
+
+  if (withPower.length < 2 && withK.length < 2) {
+    document.getElementById('analysisEmpty').style.display = '';
+    document.getElementById('analysisContent').style.display = 'none';
+    return;
+  }
+  document.getElementById('analysisEmpty').style.display = 'none';
+  document.getElementById('analysisContent').style.display = '';
+
+  // Summary stats
+  var sumRatio = 0, sumK = 0, minRatio = 9, maxRatio = 0, sumSE = 0;
+  withPower.forEach(function(e) {
+    sumRatio += e.ratio;
+    if (e.ratio < minRatio) minRatio = e.ratio;
+    if (e.ratio > maxRatio) maxRatio = e.ratio;
+    var err = e.powerW - e.expectedClipped;
+    sumSE += err * err;
+  });
+  withK.forEach(function(e) { sumK += e.kEff; });
+  var meanRatio = withPower.length ? sumRatio / withPower.length : 0;
+  var meanK = withK.length ? sumK / withK.length : 0;
+  var rmse = withPower.length ? Math.sqrt(sumSE / withPower.length) : 0;
+
+  var site = loadSite();
+  var shtml = '<div style="display:flex;flex-wrap:wrap;gap:0.25rem 0">';
+  shtml += '<div class="stat"><div class="lbl">Measurements</div><div class="val">' + log.length + '</div></div>';
+  shtml += '<div class="stat"><div class="lbl">Mean Perf Ratio</div><div class="val ' +
+    (meanRatio >= 0.9 ? 'good' : meanRatio >= 0.75 ? 'warn' : 'bad') + '">' +
+    (meanRatio * 100).toFixed(1) + '%</div></div>';
+  shtml += '<div class="stat"><div class="lbl">Ratio Range</div><div class="val">' +
+    (minRatio * 100).toFixed(0) + '–' + (maxRatio * 100).toFixed(0) + '%</div></div>';
+  shtml += '<div class="stat"><div class="lbl">RMSE</div><div class="val">' + Math.round(rmse) + ' W</div></div>';
+  shtml += '<div class="stat"><div class="lbl">Mean k<sub>eff</sub></div><div class="val warn">' + meanK.toFixed(3) + '</div></div>';
+  shtml += '</div>';
+  document.getElementById('analysisSummary').innerHTML = shtml;
+
+  // Chart styling
+  var axisStyle = { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#1e293b' } };
+  var noLegend = { plugins: { legend: { display: false } } };
+
+  // Ratio over time
+  if (ratioChartObj) ratioChartObj.destroy();
+  if (withPower.length >= 2) {
+    ratioChartObj = new Chart(document.getElementById('ratioChart'), {
+      type: 'line',
+      data: {
+        labels: withPower.map(function(e) { return e.dt.slice(5, 16).replace('T', ' '); }),
+        datasets: [{
+          label: 'Performance Ratio',
+          data: withPower.map(function(e) { return Math.round(e.ratio * 1000) / 10; }),
+          borderColor: '#f59e0b', borderWidth: 2, pointRadius: 4,
+          pointBackgroundColor: withPower.map(function(e) {
+            return e.ratio >= 0.9 ? '#22c55e' : e.ratio >= 0.75 ? '#f59e0b' : '#ef4444';
+          }),
+          fill: false, tension: 0.3
+        }]
+      },
+      options: Object.assign({}, noLegend, { animation: false,
+        scales: { x: axisStyle, y: Object.assign({}, axisStyle,
+          { title: { display: true, text: 'Ratio %', color: '#64748b' } }) } })
+    });
+  }
+
+  // k_eff over time
+  if (kEffChartObj) kEffChartObj.destroy();
+  if (withK.length >= 2) {
+    kEffChartObj = new Chart(document.getElementById('kEffChart'), {
+      type: 'line',
+      data: {
+        labels: withK.map(function(e) { return e.dt.slice(5, 16).replace('T', ' '); }),
+        datasets: [{
+          label: 'Effective k',
+          data: withK.map(function(e) { return e.kEff; }),
+          borderColor: '#fb923c', borderWidth: 2, pointRadius: 4,
+          pointBackgroundColor: '#fb923c',
+          fill: false, tension: 0.3
+        }, {
+          label: 'Seasonal k',
+          data: withK.map(function(e) { return e.kSeasonal; }),
+          borderColor: '#38bdf8', borderWidth: 1.5, borderDash: [6, 3],
+          pointRadius: 0, fill: false, tension: 0.3
+        }]
+      },
+      options: { animation: false,
+        plugins: { legend: { display: true, labels: { color: '#94a3b8', boxWidth: 10, font: { size: 9 } } } },
+        scales: { x: axisStyle, y: Object.assign({}, axisStyle,
+          { title: { display: true, text: 'k', color: '#64748b' } }) } }
+    });
+  }
+
+  // Irradiance vs Power scatter
+  if (irrVsPowerChartObj) irrVsPowerChartObj.destroy();
+  if (withPower.length >= 2) {
+    // Linear regression: Power = m * POA + b
+    var sx = 0, sy = 0, sxy = 0, sx2 = 0, n = withPower.length;
+    withPower.forEach(function(e) {
+      sx += e.poaIrr; sy += e.powerW; sxy += e.poaIrr * e.powerW; sx2 += e.poaIrr * e.poaIrr;
+    });
+    var m = (n * sxy - sx * sy) / (n * sx2 - sx * sx);
+    var b = (sy - m * sx) / n;
+
+    var minIrr = Math.min.apply(null, withPower.map(function(e) { return e.poaIrr; }));
+    var maxIrr = Math.max.apply(null, withPower.map(function(e) { return e.poaIrr; }));
+
+    irrVsPowerChartObj = new Chart(document.getElementById('irrVsPowerChart'), {
+      type: 'scatter',
+      data: {
+        datasets: [{
+          label: 'Measurements',
+          data: withPower.map(function(e) { return { x: e.poaIrr, y: e.powerW }; }),
+          backgroundColor: '#f59e0b88', borderColor: '#f59e0b', pointRadius: 5
+        }, {
+          label: 'Regression (y=' + m.toFixed(1) + 'x' + (b >= 0 ? '+' : '') + b.toFixed(0) + ')',
+          data: [{ x: minIrr, y: m * minIrr + b }, { x: maxIrr, y: m * maxIrr + b }],
+          borderColor: '#22c55e', borderWidth: 2, pointRadius: 0, type: 'line',
+          fill: false
+        }]
+      },
+      options: { animation: false,
+        plugins: { legend: { display: true, labels: { color: '#94a3b8', boxWidth: 10, font: { size: 9 } } } },
+        scales: {
+          x: Object.assign({}, axisStyle, { title: { display: true, text: 'POA Irradiance (W/m²)', color: '#64748b' } }),
+          y: Object.assign({}, axisStyle, { title: { display: true, text: 'System Power (W)', color: '#64748b' } })
+        } }
+    });
+
+    // Model summary
+    var r2 = 0;
+    var yMean = sy / n;
+    var ssTot = 0, ssRes = 0;
+    withPower.forEach(function(e) {
+      ssTot += (e.powerW - yMean) * (e.powerW - yMean);
+      var pred = m * e.poaIrr + b;
+      ssRes += (e.powerW - pred) * (e.powerW - pred);
+    });
+    r2 = ssTot > 0 ? 1 - ssRes / ssTot : 0;
+
+    var mhtml = '<h3 style="margin-bottom:0.5rem">Site Model (from ' + n + ' measurements)</h3>';
+    mhtml += '<div style="font-size:0.75rem;color:#e2e8f0;line-height:1.6">';
+    mhtml += '<strong style="color:#f59e0b">Power = ' + m.toFixed(2) + ' × POA' + (b >= 0 ? ' + ' : ' − ') + Math.abs(b).toFixed(0) + ' W</strong><br>';
+    mhtml += 'R² = ' + r2.toFixed(3) + ' · RMSE = ' + Math.round(rmse) + ' W · Mean ratio = ' + (meanRatio * 100).toFixed(1) + '%<br>';
+    mhtml += 'Mean k<sub>eff</sub> = ' + meanK.toFixed(3) + ' (seasonal avg = ' + (withK.length ? withK[0].kSeasonal : '—') + ')<br>';
+    if (meanRatio < 0.85) {
+      mhtml += '<span style="color:#ef4444">⚠ Low performance ratio may indicate shading, soiling, or system losses</span>';
+    } else if (meanRatio >= 0.92) {
+      mhtml += '<span style="color:#22c55e">✓ System performing well relative to measured irradiance</span>';
+    } else {
+      mhtml += '<span style="color:#f59e0b">System performing within typical range — consider seasonal effects</span>';
+    }
+    mhtml += '</div>';
+    document.getElementById('modelSummary').innerHTML = mhtml;
+  }
+
+  // Residual chart
+  if (residualChartObj) residualChartObj.destroy();
+  if (withPower.length >= 2) {
+    residualChartObj = new Chart(document.getElementById('residualChart'), {
+      type: 'bar',
+      data: {
+        labels: withPower.map(function(e) { return e.dt.slice(5, 16).replace('T', ' '); }),
+        datasets: [{
+          label: 'Actual − Expected (W)',
+          data: withPower.map(function(e) { return e.powerW - e.expectedClipped; }),
+          backgroundColor: withPower.map(function(e) {
+            var d = e.powerW - e.expectedClipped;
+            return d >= 0 ? '#22c55e88' : '#ef444488';
+          }),
+          borderWidth: 0
+        }]
+      },
+      options: Object.assign({}, noLegend, { animation: false,
+        scales: { x: axisStyle, y: Object.assign({}, axisStyle,
+          { title: { display: true, text: 'Residual (W)', color: '#64748b' } }) } })
+    });
+  }
+}
+
+// ============================================================
+//  Init
+// ============================================================
+populateSiteConfig();
+// Set default datetime to now
+var now = new Date();
+now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+document.getElementById('entryDT').value = now.toISOString().slice(0, 16);
+</script>
+</body>
+</html>
