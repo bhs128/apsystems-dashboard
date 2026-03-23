@@ -543,10 +543,19 @@ async function loadPanelOverlay(dateVal) {
   // --- Compute fit statistics for each model vs mean actual ---
   var fitStats = {};
   var hasDaylight = meanActual.some(function(v) { return v > 10; });
+  // Actual daily kWh per panel (integrate mean actual, 5-min intervals)
+  var actualKwhPerPanel = 0;
+  meanActual.forEach(function(v) { actualKwhPerPanel += v; });
+  actualKwhPerPanel = actualKwhPerPanel * 5 / 60 / 1000; // W·intervals → kWh
+  var actualKwhSystem = actualKwhPerPanel * nPanels;
+
   Object.keys(modelDefs).forEach(function(key) {
     var md = modelDefs[key];
     var n = 0, sumSE = 0, sumAE = 0, peakModel = 0, peakActual = 0;
+    var sunnySum = 0, clippedSum = 0;
     for (var i = 0; i < meanActual.length; i++) {
+      sunnySum += md.data[i];
+      clippedSum += Math.min(md.data[i], CLIP_W);
       if (meanActual[i] < 5 && md.data[i] < 5) continue; // skip night
       var err = md.data[i] - meanActual[i];
       sumSE += err * err;
@@ -555,13 +564,19 @@ async function loadPanelOverlay(dateVal) {
       if (meanActual[i] > peakActual) peakActual = meanActual[i];
       n++;
     }
+    // Per-panel kWh (5-min intervals)
+    var sunnyKwh = sunnySum * 5 / 60 / 1000;
+    var clippedKwh = clippedSum * 5 / 60 / 1000;
     if (n > 0) {
       fitStats[key] = {
         rmse: Math.round(Math.sqrt(sumSE / n)),
         mae: Math.round(sumAE / n),
         peakModel: Math.round(peakModel),
         peakActual: Math.round(peakActual),
-        peakErr: Math.round(peakModel - peakActual)
+        peakErr: Math.round(peakModel - peakActual),
+        sunnyKwh: sunnyKwh,
+        clippedKwh: clippedKwh,
+        lossKwh: clippedKwh - actualKwhPerPanel
       };
     }
   });
@@ -574,19 +589,35 @@ async function loadPanelOverlay(dateVal) {
     Object.keys(fitStats).forEach(function(k) {
       if (fitStats[k].rmse < bestRmse) { bestRmse = fitStats[k].rmse; bestKey = k; }
     });
-    var sHtml = '<table style="font-size:0.7rem;width:auto"><tr><th style="color:#94a3b8">Model</th>' +
+    var sHtml = '<table style="font-size:0.7rem;width:auto;border-collapse:collapse">' +
+      '<tr><th style="color:#94a3b8">Model</th>' +
       '<th style="color:#94a3b8">RMSE</th><th style="color:#94a3b8">MAE</th>' +
-      '<th style="color:#94a3b8">Peak &Delta;</th></tr>';
+      '<th style="color:#94a3b8">Peak &Delta;</th>' +
+      '<th style="color:#94a3b8;border-left:1px solid #334155;padding-left:8px">Sunny kWh</th>' +
+      '<th style="color:#94a3b8">Clipped kWh</th>' +
+      '<th style="color:#94a3b8;border-left:1px solid #334155;padding-left:8px">Est. Loss</th></tr>';
     Object.keys(modelDefs).forEach(function(key) {
       if (!fitStats[key]) return;
       var s = fitStats[key];
       var isBest = (key === bestKey);
       var rowStyle = isBest ? 'color:#22c55e;font-weight:600' : 'color:#e2e8f0';
       var badge = isBest ? ' <span style="background:#22c55e22;color:#22c55e;padding:1px 6px;border-radius:3px;font-size:0.6rem">best</span>' : '';
+      var lossColor = s.lossKwh > 0 ? '#ef4444' : '#22c55e';
       sHtml += '<tr style="' + rowStyle + '"><td>' + modelDefs[key].label + badge + '</td>' +
         '<td>' + s.rmse + ' W</td><td>' + s.mae + ' W</td>' +
-        '<td>' + (s.peakErr > 0 ? '+' : '') + s.peakErr + ' W</td></tr>';
+        '<td>' + (s.peakErr > 0 ? '+' : '') + s.peakErr + ' W</td>' +
+        '<td style="border-left:1px solid #334155;padding-left:8px">' + s.sunnyKwh.toFixed(2) + '</td>' +
+        '<td>' + s.clippedKwh.toFixed(2) + '</td>' +
+        '<td style="border-left:1px solid #334155;padding-left:8px;color:' + lossColor + '">' +
+          (s.lossKwh > 0 ? '\u2212' : '+') + Math.abs(s.lossKwh).toFixed(2) + ' kWh</td></tr>';
     });
+    // Actual row for reference
+    sHtml += '<tr style="color:#f59e0b;font-weight:600;border-top:1px solid #475569">' +
+      '<td>Actual (per panel)</td><td colspan="3"></td>' +
+      '<td style="border-left:1px solid #334155;padding-left:8px" colspan="2">' +
+        actualKwhPerPanel.toFixed(2) + ' kWh</td>' +
+      '<td style="border-left:1px solid #334155;padding-left:8px;color:#94a3b8">' +
+        'system: ' + actualKwhSystem.toFixed(1) + ' kWh</td></tr>';
     sHtml += '</table>';
     statsBox.innerHTML = sHtml;
     statsBox.style.display = '';
