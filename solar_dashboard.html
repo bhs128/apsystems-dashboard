@@ -594,9 +594,8 @@ async function loadPanelOverlay(dateVal) {
     statsBox.style.display = 'none';
   }
 
-  // --- Add checked model datasets ---
+  // --- Add all model datasets (hidden flag controls visibility) ---
   Object.keys(modelDefs).forEach(function(key) {
-    if (!checkedModels[key]) return;
     var md = modelDefs[key];
     datasets.push({
       label: md.label,
@@ -607,7 +606,9 @@ async function loadPanelOverlay(dateVal) {
       pointRadius: 0,
       tension: 0.3,
       fill: false,
-      _isPanel: false
+      _isPanel: false,
+      _modelKey: key,
+      hidden: !checkedModels[key]
     });
   });
 
@@ -618,6 +619,7 @@ async function loadPanelOverlay(dateVal) {
       datasets: datasets
     },
     options: Object.assign({}, chartOpts, {
+      animation: false,
       plugins: { legend: { display: true, position: 'bottom',
                  labels: { color: '#94a3b8', boxWidth: 12, font: { size: 10 },
                    filter: function(item, chart) {
@@ -644,11 +646,17 @@ async function loadPanelOverlay(dateVal) {
   updateOverlayLine();
 }
 
-// Rebuild overlay when model checkboxes change
+// Toggle model dataset visibility when checkboxes change (no rebuild)
 document.addEventListener('change', function(e) {
-  if (e.target.classList.contains('model-cb') && panelOverlayObj && panelOverlayObj._dateVal) {
-    loadPanelOverlay(panelOverlayObj._dateVal);
-  }
+  if (!e.target.classList.contains('model-cb') || !panelOverlayObj) return;
+  var key = e.target.value;
+  var checked = e.target.checked;
+  panelOverlayObj.data.datasets.forEach(function(ds, i) {
+    if (ds._modelKey === key) {
+      panelOverlayObj.setDatasetVisibility(i, checked);
+    }
+  });
+  panelOverlayObj.update('none');
 });
 
 function updateOverlayLine() {
