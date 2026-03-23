@@ -135,8 +135,7 @@
       <span style="color:#64748b">Models:</span>
       <label style="color:#e2e8f0;cursor:pointer"><input type="checkbox" class="model-cb" value="meinel_seasonal" checked> Meinel (seasonal k)</label>
       <label style="color:#e2e8f0;cursor:pointer"><input type="checkbox" class="model-cb" value="meinel_07"> Meinel (k=0.7)</label>
-      <label style="color:#e2e8f0;cursor:pointer;display:none" id="lbl_meinel_fitted"><input type="checkbox" class="model-cb" value="meinel_fitted" checked> Meinel (fitted k)</label>
-      <label style="color:#e2e8f0;cursor:pointer;display:none" id="lbl_meinel_weather"><input type="checkbox" class="model-cb" value="meinel_weather"> Meinel (weather k)</label>
+      <label style="color:#e2e8f0;cursor:pointer;display:none" id="lbl_meinel_weather"><input type="checkbox" class="model-cb" value="meinel_weather" checked> Meinel (weather k)</label>
       <label style="color:#e2e8f0;cursor:pointer;display:none" id="lbl_solcast_actual"><input type="checkbox" class="model-cb" value="solcast_actual" checked> Solcast actual</label>
       <label style="color:#e2e8f0;cursor:pointer;display:none" id="lbl_solcast_forecast"><input type="checkbox" class="model-cb" value="solcast_forecast"> Solcast forecast</label>
     </div>
@@ -146,6 +145,20 @@
     <div class="loading" id="panelOverlayLoading" style="display:flex;position:absolute;inset:0;z-index:2;background:#1e293b;align-items:center;justify-content:center">Loading ...</div>
     <canvas id="panelOverlayChart"></canvas>
   </div>
+</div>
+</div>
+
+<div class="chart-row">
+<div class="chart-box">
+  <h3 style="color:#94a3b8;margin:0 0 0.25rem">Weather Data</h3>
+  <div id="weatherChartBox" style="min-height:120px">
+    <div class="loading" id="weatherChartLoading">Select a day to see weather data</div>
+    <canvas id="weatherChart" style="display:none"></canvas>
+  </div>
+</div>
+<div class="chart-box">
+  <h3 style="color:#94a3b8;margin:0 0 0.25rem">Atmospheric k Derivation</h3>
+  <div id="kDerivationBox" style="font-size:0.7rem;color:#94a3b8;min-height:60px">Select a day to see k derivation</div>
 </div>
 </div>
 
@@ -351,6 +364,109 @@ var sliderLinePlugin = {
   }
 };
 
+// ---- Weather chart + k derivation ----
+var weatherChartObj = null;
+function renderWeatherChart(weatherRows, kDerivation) {
+  var canvas = document.getElementById('weatherChart');
+  var loadBox = document.getElementById('weatherChartLoading');
+  var kBox = document.getElementById('kDerivationBox');
+  if (weatherChartObj) weatherChartObj.destroy();
+
+  if (!weatherRows || !weatherRows.length) {
+    canvas.style.display = 'none';
+    loadBox.textContent = 'No weather data for this day';
+    loadBox.style.display = '';
+    kBox.innerHTML = '<span style="color:#64748b">No weather data available</span>';
+    return;
+  }
+
+  var w = weatherRows[0];
+  // Build bar chart of weather metrics
+  var labels = [];
+  var values = [];
+  var colors = [];
+  var units = [];
+
+  if (w.temp_max_c != null) { labels.push('Temp Max'); values.push(w.temp_max_c); colors.push('#ef4444'); units.push('°C'); }
+  if (w.temp_min_c != null) { labels.push('Temp Min'); values.push(w.temp_min_c); colors.push('#3b82f6'); units.push('°C'); }
+  if (w.dewpoint_mean_c != null) { labels.push('Dewpoint'); values.push(w.dewpoint_mean_c); colors.push('#06b6d4'); units.push('°C'); }
+  if (w.humidity_mean_pct != null) { labels.push('Humidity'); values.push(w.humidity_mean_pct); colors.push('#8b5cf6'); units.push('%'); }
+  if (w.pwv_mm != null) { labels.push('PWV'); values.push(w.pwv_mm); colors.push('#f59e0b'); units.push('mm'); }
+  if (w.pm25_ugm3 != null) { labels.push('PM2.5'); values.push(w.pm25_ugm3); colors.push('#f97316'); units.push('µg/m³'); }
+  else if (w.pm25_aqi != null) { labels.push('PM2.5 AQI'); values.push(w.pm25_aqi); colors.push('#f97316'); units.push('AQI'); }
+  if (w.cloud_cover_pct != null) { labels.push('Cloud Cover'); values.push(w.cloud_cover_pct); colors.push('#94a3b8'); units.push('%'); }
+  if (w.pressure_hpa != null) { labels.push('Pressure'); values.push(Math.round(w.pressure_hpa)); colors.push('#64748b'); units.push('hPa'); }
+
+  if (labels.length === 0) {
+    canvas.style.display = 'none';
+    loadBox.textContent = 'No weather metrics available';
+    loadBox.style.display = '';
+    return;
+  }
+
+  loadBox.style.display = 'none';
+  canvas.style.display = '';
+  weatherChartObj = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        data: values,
+        backgroundColor: colors.map(function(c) { return c + '88'; }),
+        borderColor: colors,
+        borderWidth: 1
+      }]
+    },
+    options: {
+      responsive: true,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: function(ctx) {
+              return ctx.parsed.y.toFixed(1) + ' ' + units[ctx.dataIndex];
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { color: '#94a3b8', font: { size: 9 } }, grid: { display: false } },
+        y: { display: false }
+      }
+    },
+    plugins: [{
+      // Value labels on bars
+      id: 'barLabels',
+      afterDatasetsDraw: function(chart) {
+        var ctx = chart.ctx;
+        ctx.font = '10px -apple-system, sans-serif';
+        ctx.textAlign = 'center';
+        chart.data.datasets[0].data.forEach(function(val, i) {
+          var meta = chart.getDatasetMeta(0).data[i];
+          var y = meta.y;
+          ctx.fillStyle = '#e2e8f0';
+          var label = (Math.abs(val) >= 100 ? Math.round(val) : val.toFixed(1)) + ' ' + units[i];
+          ctx.fillText(label, meta.x, y - 4);
+        });
+      }
+    }]
+  });
+
+  // Render k derivation steps
+  if (kDerivation && kDerivation.steps.length > 0) {
+    var html = '<div style="font-size:0.7rem;color:#e2e8f0;line-height:1.8">';
+    html += '<span style="color:#64748b">k derivation chain:</span><br>';
+    kDerivation.steps.forEach(function(step) {
+      html += '<span style="color:#fb923c">\u25b8</span> ' + step + '<br>';
+    });
+    html += '</div>';
+    kBox.innerHTML = html;
+  } else {
+    kBox.innerHTML = '<span style="color:#64748b">No weather data for k derivation</span>';
+  }
+}
+
 async function loadPanelOverlay(dateVal) {
   if (!dateVal) dateVal = document.getElementById('sliderDayPick').value;
   if (!dateVal) return;
@@ -378,6 +494,7 @@ async function loadPanelOverlay(dateVal) {
     document.getElementById('modelFitStats').style.display = 'none';
     var b = document.getElementById('dataAvailBadges');
     if (b) b.innerHTML = '<span style="color:#64748b;font-size:0.65rem">No data for this day</span>';
+    renderWeatherChart(weatherRows, null);
     toast('No panel data for ' + dateVal, false);
     return;
   }
@@ -423,16 +540,48 @@ async function loadPanelOverlay(dateVal) {
   var month = parseInt(dateVal.slice(5, 7));
   var kSeasonal = monthlyK[month] || 0.76;
 
-  // --- Weather-based k (from PWV) ---
+  // --- Weather-derived k (from PWV, PM2.5, humidity) ---
   var hasWeather = weatherRows && weatherRows.length > 0;
   var kWeather = null;
+  var kDerivation = null;
   if (hasWeather) {
     var w = weatherRows[0];
+    // Start with base clear-sky k from PWV (water vapor absorption)
+    var kBase = kSeasonal; // fallback to seasonal
+    var derivSteps = [];
     if (w.pwv_mm != null && w.pwv_mm > 0) {
-      // Empirical PWV → k mapping (fitted to NSRDB data)
-      // Higher PWV = more absorption = lower k
-      kWeather = Math.max(0.55, Math.min(0.88, 0.86 - 0.005 * w.pwv_mm));
+      // PWV drives the primary atmospheric k: more moisture = lower k
+      // Calibrated range: PWV 5mm → k≈0.84, PWV 40mm → k≈0.70
+      kBase = Math.max(0.60, Math.min(0.88, 0.86 - 0.004 * w.pwv_mm));
+      derivSteps.push('PWV ' + w.pwv_mm.toFixed(1) + ' mm → k_base=' + kBase.toFixed(3));
+    } else if (w.dewpoint_mean_c != null) {
+      // Derive PWV from dewpoint via Reitan (1963)
+      var pwvEst = 0.1 * Math.exp(1.2 + 0.0614 * w.dewpoint_mean_c) * 10;
+      kBase = Math.max(0.60, Math.min(0.88, 0.86 - 0.004 * pwvEst));
+      derivSteps.push('Dewpoint ' + w.dewpoint_mean_c.toFixed(1) + '°C → PWV≈' + pwvEst.toFixed(1) + ' mm → k_base=' + kBase.toFixed(3));
     }
+    // Aerosol penalty from PM2.5 (reduces transmission)
+    var aerosolFactor = 1.0;
+    if (w.pm25_ugm3 != null && w.pm25_ugm3 > 0) {
+      // Each 10 µg/m³ PM2.5 reduces k by ~0.5%
+      aerosolFactor = Math.max(0.90, 1.0 - w.pm25_ugm3 * 0.0005);
+      derivSteps.push('PM2.5 ' + w.pm25_ugm3.toFixed(1) + ' µg/m³ → aero=' + aerosolFactor.toFixed(3));
+    } else if (w.pm25_aqi != null && w.pm25_aqi > 0) {
+      // Convert AQI to approx µg/m³ and apply penalty
+      var pm25Est = w.pm25_aqi <= 50 ? w.pm25_aqi * 12 / 50 : 12 + (w.pm25_aqi - 50) * 23.3 / 50;
+      aerosolFactor = Math.max(0.90, 1.0 - pm25Est * 0.0005);
+      derivSteps.push('PM2.5 AQI ' + w.pm25_aqi.toFixed(0) + ' (≈' + pm25Est.toFixed(1) + ' µg/m³) → aero=' + aerosolFactor.toFixed(3));
+    }
+    // Humidity penalty (high humidity = more scattering)
+    var humidFactor = 1.0;
+    if (w.humidity_mean_pct != null && w.humidity_mean_pct > 60) {
+      humidFactor = Math.max(0.97, 1.0 - (w.humidity_mean_pct - 60) * 0.0005);
+      derivSteps.push('RH ' + w.humidity_mean_pct.toFixed(0) + '% → humid=' + humidFactor.toFixed(3));
+    }
+    kWeather = kBase * aerosolFactor * humidFactor;
+    kWeather = Math.max(0.50, Math.min(0.90, kWeather));
+    derivSteps.push('<strong>k_weather = ' + kWeather.toFixed(3) + '</strong>');
+    kDerivation = { steps: derivSteps, w: w, kBase: kBase, aerosolFactor: aerosolFactor, humidFactor: humidFactor };
   }
 
   // --- Solcast data interpolation helper ---
@@ -471,39 +620,6 @@ async function loadPanelOverlay(dateVal) {
     });
   }
 
-  // --- Solve for best-fit k from actual data (golden-section search) ---
-  var kFitted = null;
-  var hasDaylightForFit = meanActual.some(function(v) { return v > 50; });
-  if (hasDaylightForFit) {
-    // Precompute hours array once
-    var hours = data.map(function(r) {
-      var hm = r.timestamp.slice(11, 16).split(':');
-      return parseInt(hm[0]) + parseInt(hm[1]) / 60;
-    });
-    function rmseForK(kVal) {
-      var sumSE = 0, n = 0;
-      for (var i = 0; i < meanActual.length; i++) {
-        var model = clearSkyPanelPowerK(dateVal, hours[i], LAT, LON, tilt, panelAz, panelW, kVal);
-        // Only fit against daylight points above clip (clear-sky portion)
-        if (meanActual[i] < 10 && model < 10) continue;
-        // Skip clipped points — they don't reflect true irradiance
-        if (meanActual[i] >= 318) continue;
-        var err = model - meanActual[i];
-        sumSE += err * err;
-        n++;
-      }
-      return n > 0 ? Math.sqrt(sumSE / n) : Infinity;
-    }
-    // Golden-section search on k in [0.50, 0.95]
-    var a = 0.50, b = 0.95, gr = (Math.sqrt(5) + 1) / 2;
-    for (var iter = 0; iter < 30; iter++) {
-      var c = b - (b - a) / gr;
-      var d = a + (b - a) / gr;
-      if (rmseForK(c) < rmseForK(d)) b = d; else a = c;
-    }
-    kFitted = (a + b) / 2;
-  }
-
   // --- Build model curves ---
   var CLIP_W = 320; // DS3-S per-channel clip
   // Precompute hours for curve building
@@ -531,15 +647,8 @@ async function loadPanelOverlay(dateVal) {
   if (kWeather != null) {
     modelDefs.meinel_weather = {
       label: 'Meinel (weather k=' + kWeather.toFixed(3) + ')',
-      color: '#fb923c', dash: [6, 3], width: 2,
+      color: '#fb923c', dash: [], width: 2.5,
       data: meinelCurve(kWeather)
-    };
-  }
-  if (kFitted != null) {
-    modelDefs.meinel_fitted = {
-      label: 'Meinel (fitted k=' + kFitted.toFixed(3) + ')',
-      color: '#e879f9', dash: [], width: 2.5,
-      data: meinelCurve(kFitted)
     };
   }
   var solActData = solcastToPerPanel(solcastActual);
@@ -562,19 +671,20 @@ async function loadPanelOverlay(dateVal) {
   // --- Show/hide model checkboxes based on availability ---
   document.getElementById('modelControls').style.display = '';
   document.getElementById('lbl_meinel_weather').style.display = kWeather != null ? '' : 'none';
-  document.getElementById('lbl_meinel_fitted').style.display = kFitted != null ? '' : 'none';
   document.getElementById('lbl_solcast_actual').style.display = solActData ? '' : 'none';
   document.getElementById('lbl_solcast_forecast').style.display = solFcData ? '' : 'none';
 
   // --- Data availability badges ---
   var avail = [];
   avail.push('<span style="background:#38bdf822;color:#38bdf8;padding:1px 6px;border-radius:3px;font-size:0.6rem">panels</span>');
-  if (hasWeather) avail.push('<span style="background:#fb923c22;color:#fb923c;padding:1px 6px;border-radius:3px;font-size:0.6rem">weather</span>');
+  if (hasWeather) avail.push('<span style="background:#fb923c22;color:#fb923c;padding:1px 6px;border-radius:3px;font-size:0.6rem">weather' + (kWeather != null ? ' k=' + kWeather.toFixed(3) : '') + '</span>');
   if (solActData) avail.push('<span style="background:#22c55e22;color:#22c55e;padding:1px 6px;border-radius:3px;font-size:0.6rem">solcast actual</span>');
   if (solFcData) avail.push('<span style="background:#facc1522;color:#facc15;padding:1px 6px;border-radius:3px;font-size:0.6rem">solcast forecast</span>');
-  if (kFitted != null) avail.push('<span style="background:#e879f922;color:#e879f9;padding:1px 6px;border-radius:3px;font-size:0.6rem">fitted k=' + kFitted.toFixed(3) + '</span>');
   var badgeEl = document.getElementById('dataAvailBadges');
   if (badgeEl) badgeEl.innerHTML = avail.join(' ');
+
+  // --- Render weather chart + k derivation ---
+  renderWeatherChart(weatherRows, kDerivation);
 
   // --- Get checked models ---
   var checkedModels = {};
