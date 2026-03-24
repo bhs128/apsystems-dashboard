@@ -221,7 +221,14 @@ new Chart(document.getElementById('billChart'), {{
       {{ label: 'Est. w/o Solar', data: {json.dumps(bill_est)}, backgroundColor: '#ef444488' }}
     ]
   }},
-  options: {{ ...chartOpts, plugins: {{ legend: {{ display: true, labels: {{ color: '#94a3b8' }} }} }} }}
+  options: {{ ...chartOpts,
+    plugins: {{ legend: {{ display: true, labels: {{ color: '#94a3b8' }} }} }},
+    scales: {{ ...chartOpts.scales,
+      x: {{ ...chartOpts.scales.x,
+        ticks: {{ ...chartOpts.scales.x.ticks, maxTicksLimit: 30, maxRotation: 45, minRotation: 25 }}
+      }}
+    }}
+  }}
 }});
 
 // Finance
