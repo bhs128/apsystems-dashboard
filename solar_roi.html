@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solar ROI &amp; Payback Timeline</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #0f172a; color: #e2e8f0; padding: 1rem; max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; color: #f59e0b; margin-bottom: 0.25rem; }
+  h3 { font-size: 0.9rem; color: #f59e0b; margin-bottom: 0.5rem; }
+  a { color: #38bdf8; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .subtitle { color: #94a3b8; font-size: 0.8rem; margin-bottom: 1rem; }
+  .nav { font-size: 0.75rem; margin-bottom: 1rem; }
+  .nav a { margin-right: 1rem; }
+  .box { background: #1e293b; border-radius: 0.75rem; padding: 1rem; margin-bottom: 1rem; }
+  label { display: block; font-size: 0.7rem; color: #94a3b8; margin-bottom: 0.15rem;
+          text-transform: uppercase; letter-spacing: 0.04em; }
+  input, select { background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+    padding: 0.35rem 0.5rem; border-radius: 0.4rem; font-size: 0.8rem; width: 100%;
+    margin-bottom: 0.4rem; font-family: inherit; }
+  input:focus { border-color: #f59e0b; outline: none; }
+  button { border: none; padding: 0.45rem 1rem; border-radius: 0.4rem; cursor: pointer;
+           font-weight: 600; font-size: 0.8rem; }
+  .btn-primary { background: #f59e0b; color: #0f172a; }
+  .btn-primary:hover { background: #d97706; }
+  .field-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(155px, 1fr)); gap: 0.5rem; }
+  .help { font-size: 0.65rem; color: #64748b; margin-top: 0.1rem; }
+  .collapsible { cursor: pointer; user-select: none; }
+  .collapsible::before { content: '▸ '; color: #f59e0b; }
+  .collapsible.open::before { content: '▾ '; }
+
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.5rem;
+              margin-bottom: 1rem; }
+  .kpi { background: #0f172a; border: 1px solid #334155; border-radius: 0.5rem;
+         padding: 0.6rem; text-align: center; }
+  .kpi .val { font-size: 1.2rem; font-weight: 700; }
+  .kpi .lbl { font-size: 0.6rem; color: #64748b; text-transform: uppercase; margin-top: 0.15rem;
+              line-height: 1.3; }
+  .kpi .sub { font-size: 0.6rem; color: #94a3b8; }
+  .good { color: #22c55e; } .warn { color: #f59e0b; } .bad { color: #ef4444; }
+  .cyan { color: #38bdf8; } .purple { color: #a78bfa; }
+
+  .chart-wrap { position: relative; height: 350px; margin-bottom: 1rem; }
+  .chart-wrap canvas { position: absolute; inset: 0; }
+
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 700px) { .row2 { grid-template-columns: 1fr; } }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.7rem; font-family: 'SF Mono', monospace, monospace; }
+  th, td { padding: 0.25rem 0.4rem; text-align: right; border-bottom: 1px solid #1e293b; }
+  th { color: #64748b; font-weight: 600; font-size: 0.6rem; text-transform: uppercase; position: sticky; top: 0; background: #1e293b; }
+  th:first-child, td:first-child { text-align: left; }
+  .tbl-actual { background: rgba(34,197,94,0.04); }
+  .tbl-forecast { background: rgba(251,146,60,0.04); }
+  .legend-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+
+  .toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: #22c55e;
+           color: #0f172a; padding: 0.5rem 1rem; border-radius: 0.5rem;
+           font-weight: 600; font-size: 0.8rem; opacity: 0; transition: opacity 0.3s; z-index: 99; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<h1>&#9728; Solar ROI &amp; Payback Timeline</h1>
+<div class="nav">
+  <a href="/">&larr; Dashboard</a>
+  <a href="/field">Field Log</a>
+  <a href="/clipping">Clipping</a>
+</div>
+<p class="subtitle">25-year payback-to-profit projection &mdash; actual data shaded solid, forecast dashed</p>
+
+<!-- Scenario Inputs -->
+<div class="box">
+  <h3 class="collapsible open" onclick="toggleSection(this, 'scenarioInputs')">Scenario Parameters</h3>
+  <div id="scenarioInputs">
+    <p class="help" style="margin-bottom:0.5rem">
+      Billing &amp; HELOC history loaded from DB. Adjust forecast assumptions below.
+    </p>
+    <div class="field-grid">
+      <div>
+        <label>Down Payment ($)</label>
+        <input type="number" id="inDown" step="1" value="1733">
+      </div>
+      <div>
+        <label>HELOC APR (%)</label>
+        <input type="number" id="inAPR" step="0.1" value="6.0">
+        <p class="help">Forecast months only</p>
+      </div>
+      <div>
+        <label>Monthly HELOC Payment ($)</label>
+        <input type="number" id="inPayment" step="1" value="160">
+        <p class="help">Forecast months only</p>
+      </div>
+      <div>
+        <label>Utility Rate Escalation (%/yr)</label>
+        <input type="number" id="inRateEsc" step="0.5" value="8">
+      </div>
+      <div>
+        <label>Panel Degradation (%/yr)</label>
+        <input type="number" id="inDegrade" step="0.1" value="0.5">
+      </div>
+      <div>
+        <label>Fixed Charge Escalation (%/yr)</label>
+        <input type="number" id="inFixedEsc" step="0.5" value="4">
+      </div>
+      <div>
+        <label>Avg Monthly Consumption (kWh)</label>
+        <input type="number" id="inAvgConsume" step="1" value="665">
+        <p class="help">Used for no-solar baseline</p>
+      </div>
+      <div>
+        <label>Current Utility Rate ($/kWh)</label>
+        <input type="number" id="inRate" step="0.001" value="0.232">
+      </div>
+      <div>
+        <label>Forecast Horizon (years)</label>
+        <input type="number" id="inYears" step="1" value="25" min="5" max="40">
+      </div>
+    </div>
+    <div style="margin-top:0.5rem">
+      <button class="btn-primary" onclick="runModel()">Recalculate Scenario</button>
+      <span id="modelStatus" style="font-size:0.7rem;color:#22c55e;margin-left:0.5rem"></span>
+    </div>
+  </div>
+</div>
+
+<!-- KPI cards -->
+<div class="kpi-grid" id="kpis"></div>
+
+<!-- Main chart -->
+<div class="box">
+  <h3>Cumulative Cost: No Solar vs With Solar</h3>
+  <p class="help" style="margin-bottom:0.5rem">
+    <span class="legend-dot" style="background:#22c55e"></span>Solid = actual realized &nbsp;
+    <span class="legend-dot" style="background:#fb923c"></span>Dashed = forecast &nbsp;
+    Shaded area = net savings
+  </p>
+  <div class="chart-wrap"><canvas id="mainChart"></canvas></div>
+</div>
+
+<!-- Secondary charts -->
+<div class="row2">
+  <div class="box">
+    <h3>Monthly Cash Flow</h3>
+    <div class="chart-wrap" style="height:250px"><canvas id="cashflowChart"></canvas></div>
+  </div>
+  <div class="box">
+    <h3>HELOC Balance</h3>
+    <div class="chart-wrap" style="height:250px"><canvas id="helocChart"></canvas></div>
+  </div>
+</div>
+
+<!-- Year-by-year table -->
+<div class="box">
+  <h3 class="collapsible" onclick="toggleSection(this, 'yearTable')">Year-by-Year Detail</h3>
+  <div id="yearTable" style="display:none; max-height:400px; overflow-y:auto; margin-top:0.5rem">
+    <table>
+      <thead>
+        <tr>
+          <th>Year</th>
+          <th>Type</th>
+          <th>No-Solar Cost</th>
+          <th>Elec Bill</th>
+          <th>HELOC Paid</th>
+          <th>With-Solar Cost</th>
+          <th>Annual Savings</th>
+          <th>Cum. No-Solar</th>
+          <th>Cum. With-Solar</th>
+          <th>Cum. Net Savings</th>
+          <th>LCOE-to-Date</th>
+        </tr>
+      </thead>
+      <tbody id="yearTbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+//  Globals
+// ============================================================
+var billingData = [];   // from /api/billing
+var financeData = [];   // from /api/finance
+var mainChartObj = null, cashflowChartObj = null, helocChartObj = null;
+
+// ============================================================
+//  Helpers
+// ============================================================
+function $(id) { return document.getElementById(id); }
+function fmt(n, d) { return n.toLocaleString('en-US', {minimumFractionDigits: d, maximumFractionDigits: d}); }
+function toast(msg, ok) {
+  var el = $('toast'); el.textContent = msg;
+  el.style.background = ok ? '#22c55e' : '#ef4444';
+  el.classList.add('show');
+  setTimeout(function() { el.classList.remove('show'); }, 2500);
+}
+function toggleSection(el, id) {
+  var box = $(id); el.classList.toggle('open');
+  box.style.display = el.classList.contains('open') ? '' : 'none';
+}
+
+async function fetchJSON(url) {
+  var r = await fetch(url);
+  if (!r.ok) throw new Error(url + ': ' + r.status);
+  return r.json();
+}
+
+// ============================================================
+//  Load data and run
+// ============================================================
+async function init() {
+  try {
+    var results = await Promise.all([fetchJSON('/api/billing'), fetchJSON('/api/finance')]);
+    billingData = results[0];
+    financeData = results[1];
+
+    // Sort by date
+    billingData.sort(function(a, b) { return a.meter_date < b.meter_date ? -1 : 1; });
+    financeData.sort(function(a, b) { return a.date < b.date ? -1 : 1; });
+
+    // Auto-fill avg consumption from actual data
+    if (billingData.length >= 6) {
+      var totalCons = billingData.reduce(function(s, r) { return s + r.energy_consumed_kwh; }, 0);
+      $('inAvgConsume').value = Math.round(totalCons / billingData.length);
+    }
+
+    runModel();
+  } catch(e) {
+    toast('Failed to load data: ' + e.message, false);
+  }
+}
+
+// ============================================================
+//  Bill decomposition regression (from actual billing data)
+// ============================================================
+function decomposeActualBills(billing) {
+  // bill = fixed + rate * max(0, consumed - produced)
+  // Exclude pre-solar months (produced == 0 with high bills)
+  var rows = billing.filter(function(r) { return r.energy_produced_kwh > 0; });
+  if (rows.length < 3) return { fixed: 10.77, varRate: 0.2117 }; // fallback
+
+  var n = rows.length;
+  var net = rows.map(function(r) { return Math.max(0, r.energy_consumed_kwh - r.energy_produced_kwh); });
+  var bills = rows.map(function(r) { return r.actual_bill; });
+  var sx = 0, sy = 0, sxy = 0, sx2 = 0;
+  for (var i = 0; i < n; i++) {
+    sx += net[i]; sy += bills[i]; sxy += net[i] * bills[i]; sx2 += net[i] * net[i];
+  }
+  var denom = n * sx2 - sx * sx;
+  if (Math.abs(denom) < 0.001) return { fixed: sy / n, varRate: 0 };
+
+  var varRate = (n * sxy - sx * sy) / denom;
+  var fixed = (sy - varRate * sx) / n;
+  if (fixed < 0) fixed = 0;
+  if (varRate < 0) varRate = 0;
+  return { fixed: fixed, varRate: varRate };
+}
+
+// ============================================================
+//  Build monthly seasonal profile from actual billing
+// ============================================================
+function buildSeasonalProfile(billing) {
+  // Build consumed/produced per calendar month.
+  // Use most recent data point for each month (avoids ramp-up / partial months).
+  // Exclude pre-solar months (no production).
+  var months = {}; // month(1-12) -> {date, consumed, produced}
+  billing.forEach(function(r) {
+    if (r.energy_produced_kwh <= 0) return;
+    var m = parseInt(r.meter_date.slice(5, 7));
+    // Keep only the latest entry per calendar month
+    if (!months[m] || r.meter_date > months[m].date) {
+      months[m] = { date: r.meter_date, consumed: r.energy_consumed_kwh, produced: r.energy_produced_kwh };
+    }
+  });
+
+  // Compute fallback from all solar-era months
+  var solarRows = billing.filter(function(r) { return r.energy_produced_kwh > 0; });
+  var tc = solarRows.reduce(function(s,r){return s + r.energy_consumed_kwh;}, 0) / (solarRows.length || 1);
+  var tp = solarRows.reduce(function(s,r){return s + r.energy_produced_kwh;}, 0) / (solarRows.length || 1);
+
+  var profile = [];
+  for (var m = 1; m <= 12; m++) {
+    if (months[m]) {
+      profile.push({ month: m, consumed: months[m].consumed, produced: months[m].produced });
+    } else {
+      profile.push({ month: m, consumed: tc, produced: tp });
+    }
+  }
+  return profile;
+}
+
+// ============================================================
+//  Core model
+// ============================================================
+function runModel() {
+  var downPayment = parseFloat($('inDown').value) || 0;
+  var apr = (parseFloat($('inAPR').value) || 6) / 100;
+  var monthlyPayment = parseFloat($('inPayment').value) || 160;
+  var rateEsc = (parseFloat($('inRateEsc').value) || 8) / 100;
+  var degrade = (parseFloat($('inDegrade').value) || 0.5) / 100;
+  var fixedEsc = (parseFloat($('inFixedEsc').value) || 4) / 100;
+  var avgConsume = parseFloat($('inAvgConsume').value) || 665;
+  var utilRate = parseFloat($('inRate').value) || 0.232;
+  var horizonYears = parseInt($('inYears').value) || 25;
+  var horizonMonths = horizonYears * 12;
+
+  // Decompose bills
+  var decomp = decomposeActualBills(billingData);
+  var seasonal = buildSeasonalProfile(billingData);
+
+  // Determine system start date = first billing month with production
+  var firstProdBill = billingData.find(function(r) { return r.energy_produced_kwh > 0; });
+  var startDate = firstProdBill ? new Date(firstProdBill.meter_date) : new Date('2024-11-01');
+  var startYear = startDate.getFullYear();
+  var startMonth = startDate.getMonth(); // 0-indexed
+
+  // Build lookup maps for actual data (keyed by YYYY-MM)
+  var actualBillingMap = {};
+  billingData.forEach(function(r) {
+    var key = r.meter_date.slice(0, 7);
+    actualBillingMap[key] = r;
+  });
+  var actualFinanceMap = {};
+  financeData.forEach(function(r) {
+    actualFinanceMap[r.date.slice(0, 7)] = r;
+  });
+
+  // Find latest actual HELOC balance
+  var latestFinance = financeData[financeData.length - 1];
+  var latestFinanceDate = latestFinance ? new Date(latestFinance.date) : null;
+
+  // Find latest actual billing date
+  var latestBilling = billingData[billingData.length - 1];
+  var latestBillingDate = latestBilling ? new Date(latestBilling.meter_date) : null;
+
+  // Determine last month of actual data
+  var lastActualDate = latestBillingDate;
+  if (latestFinanceDate && latestFinanceDate > lastActualDate) lastActualDate = latestFinanceDate;
+
+  // Initial HELOC balance: the peak balance from finance data
+  var peakBalance = 0;
+  financeData.forEach(function(r) { if (r.heloc_balance > peakBalance) peakBalance = r.heloc_balance; });
+
+  // Total actual interest paid so far
+  var totalActualInterest = financeData.reduce(function(s, r) { return s + r.interest; }, 0);
+
+  // Pre-compute typical principal payment from finance history so we can
+  // detect the rebate outlier (large lump-sum that wasn't user-paid)
+  var allPrincPayments = [];
+  for (var fi = 1; fi < financeData.length; fi++) {
+    var pp = Math.max(0, financeData[fi - 1].heloc_balance - financeData[fi].heloc_balance);
+    if (pp > 0) allPrincPayments.push(pp);
+  }
+  allPrincPayments.sort(function(a, b) { return a - b; });
+  var medianPrinc = allPrincPayments.length > 0
+    ? allPrincPayments[Math.floor(allPrincPayments.length / 2)]
+    : 0;
+  var princOutlierThreshold = medianPrinc * 5; // rebate ~60× median, normal variation <2×
+
+  // ---- Month-by-month simulation ----
+  var schedule = []; // {date, label, isActual, cumNoSolar, cumWithSolar, noSolarMonthly, withSolarMonthly, helocBalance, interest, electricBill, estNoSolar, savings}
+
+  var cumNoSolar = 0;
+  var cumWithSolar = downPayment;
+  var cumProduction = 0;
+  var cumSystemCost = downPayment; // down + HELOC payments only (for LCOE)
+  var helocBalance = peakBalance;
+  var totalInterest = 0;
+  var breakevenMonth = null;
+  var helocPayoffMonth = null;
+  for (var mo = 0; mo < horizonMonths; mo++) {
+    var d = new Date(startYear, startMonth + mo, 1);
+    var yearLabel = d.getFullYear();
+    var monthNum = d.getMonth() + 1; // 1-12
+    var key = d.toISOString().slice(0, 7); // YYYY-MM
+    var yearIndex = Math.floor(mo / 12); // years since start
+    var calMonth = monthNum; // 1-12
+
+    var isActual = false;
+    var noSolarMonthly, electricBill, estNoSolar, interest, helocPaid;
+
+    // Check if we have actual data for this month
+    var actualBill = actualBillingMap[key];
+    var actualFin = actualFinanceMap[key];
+
+    var monthProduction = 0;
+
+    if (actualBill && actualFin) {
+      // Full actual data — trust DB balances, derive payment from delta
+      isActual = true;
+      estNoSolar = actualBill.est_bill_without_solar;
+      electricBill = actualBill.actual_bill;
+      monthProduction = actualBill.energy_produced_kwh || 0;
+      interest = actualFin.interest;
+      var prevBal = (mo > 0 && schedule[mo - 1]) ? schedule[mo - 1].helocBalance : peakBalance;
+      helocBalance = actualFin.heloc_balance;
+      var princPaid = Math.max(0, prevBal - helocBalance);
+      // Detect rebate outlier: large principal drop that was free money, not user-paid
+      if (princPaid > princOutlierThreshold) princPaid = medianPrinc;
+      helocPaid = interest + princPaid;
+    } else if (actualBill && !actualFin) {
+      // Billing actual, finance modeled
+      isActual = true;
+      estNoSolar = actualBill.est_bill_without_solar;
+      electricBill = actualBill.actual_bill;
+      monthProduction = actualBill.energy_produced_kwh || 0;
+      // Model HELOC
+      interest = helocBalance * apr / 12;
+      var princ = Math.min(monthlyPayment - interest, helocBalance);
+      if (princ < 0) princ = 0;
+      helocBalance -= princ;
+      if (helocBalance < 0.01) helocBalance = 0;
+      helocPaid = monthlyPayment;
+      if (helocBalance === 0) helocPaid = interest + princ;
+    } else {
+      // Fully forecasted
+      isActual = false;
+      var deg = Math.pow(1 - degrade, yearIndex);
+      var fmCharge = decomp.fixed * Math.pow(1 + fixedEsc, yearIndex);
+      var vRate = decomp.varRate * Math.pow(1 + rateEsc, yearIndex);
+      var sp = seasonal[calMonth - 1] || { consumed: avgConsume, produced: avgConsume };
+      monthProduction = sp.produced * deg;
+      var netGrid = Math.max(0, sp.consumed - monthProduction);
+      electricBill = fmCharge + vRate * netGrid;
+
+      estNoSolar = avgConsume * utilRate * Math.pow(1 + rateEsc, yearIndex);
+
+      // Model HELOC
+      interest = helocBalance * apr / 12;
+      var princ2 = Math.min(monthlyPayment - interest, helocBalance);
+      if (princ2 < 0) princ2 = 0;
+      helocBalance -= princ2;
+      if (helocBalance < 0.01) helocBalance = 0;
+      helocPaid = helocBalance > 0 || princ2 > 0 ? interest + princ2 : 0;
+    }
+
+    noSolarMonthly = estNoSolar;
+    var withSolarMonthly = electricBill + (helocBalance > 0 || helocPaid > 0 ? helocPaid : 0);
+
+    cumProduction += monthProduction;
+    cumNoSolar += noSolarMonthly;
+    cumWithSolar += withSolarMonthly;
+    cumSystemCost += (helocBalance > 0 || helocPaid > 0 ? helocPaid : 0);
+    totalInterest += interest;
+
+    var savings = cumNoSolar - cumWithSolar;
+    var lcoe = cumProduction > 0 ? cumSystemCost / cumProduction : 0;
+
+    if (breakevenMonth === null && savings >= 0 && mo > 0) breakevenMonth = mo + 1;
+    if (helocPayoffMonth === null && helocBalance === 0 && mo > 0) helocPayoffMonth = mo + 1;
+
+    schedule.push({
+      date: key,
+      label: key,
+      monthNum: mo + 1,
+      calMonth: calMonth,
+      year: yearLabel,
+      yearIndex: yearIndex,
+      isActual: isActual,
+      cumNoSolar: cumNoSolar,
+      cumWithSolar: cumWithSolar,
+      noSolarMonthly: noSolarMonthly,
+      withSolarMonthly: withSolarMonthly,
+      electricBill: electricBill,
+      estNoSolar: estNoSolar,
+      helocBalance: helocBalance,
+      interest: interest,
+      helocPaid: helocPaid || 0,
+      production: monthProduction,
+      cumProduction: cumProduction,
+      lcoe: lcoe,
+      savings: savings
+    });
+  }
+
+  var totalSavings = cumNoSolar - cumWithSolar;
+  var lifetimeLCOE = cumProduction > 0 ? cumSystemCost / cumProduction : 0;
+
+  // ---- Render KPIs ----
+  renderKPIs(breakevenMonth, helocPayoffMonth, totalInterest, totalSavings, peakBalance, downPayment, horizonYears, schedule, lifetimeLCOE, cumProduction);
+
+  // ---- Render charts ----
+  renderMainChart(schedule, breakevenMonth, helocPayoffMonth);
+  renderCashflowChart(schedule);
+  renderHelocChart(schedule);
+
+  // ---- Render table ----
+  renderYearTable(schedule, horizonYears);
+
+  $('modelStatus').textContent = 'Updated ✓';
+  setTimeout(function() { $('modelStatus').textContent = ''; }, 2000);
+}
+
+// ============================================================
+//  KPI cards
+// ============================================================
+function renderKPIs(breakevenMo, helocPayoffMo, totalInterest, totalSavings, peakBalance, downPayment, horizonYears, schedule, lifetimeLCOE, cumProduction) {
+  var html = '';
+  function kpi(val, label, cls, sub) {
+    html += '<div class="kpi"><div class="val ' + (cls||'') + '">' + val + '</div><div class="lbl">' + label + '</div>';
+    if (sub) html += '<div class="sub">' + sub + '</div>';
+    html += '</div>';
+  }
+
+  var totalCost = peakBalance + downPayment;
+  kpi('$' + fmt(totalCost, 0), 'System Cost', 'cyan');
+  kpi('$' + fmt(downPayment, 0), 'Down Payment', '');
+  kpi('$' + fmt(peakBalance, 0), 'Peak HELOC', 'cyan');
+
+  if (breakevenMo) {
+    var yr = (breakevenMo / 12).toFixed(1);
+    kpi(yr + ' yr', 'Breakeven', 'good', 'Month ' + breakevenMo);
+  } else {
+    kpi('>' + horizonYears + ' yr', 'Breakeven', 'bad');
+  }
+
+  if (helocPayoffMo) {
+    var yr2 = (helocPayoffMo / 12).toFixed(1);
+    kpi(yr2 + ' yr', 'HELOC Payoff', 'cyan', 'Month ' + helocPayoffMo);
+  }
+
+  kpi('$' + fmt(totalInterest, 0), 'Total Interest', 'bad');
+  kpi('$' + fmt(totalSavings, 0), horizonYears + '-Yr Net Savings', 'good');
+
+  // LCOE
+  var utilRate = parseFloat($('inRate').value) || 0.232;
+  var lcoeClass = lifetimeLCOE < utilRate ? 'good' : lifetimeLCOE < utilRate * 1.5 ? 'warn' : 'bad';
+  kpi('$' + fmt(lifetimeLCOE, 3), horizonYears + '-Yr Solar LCOE', lcoeClass, fmt(cumProduction, 0) + ' kWh total');
+
+  // LCOE parity milestone: first month LCOE drops below utility rate
+  var lcoeCrossMo = null;
+  for (var i = 12; i < schedule.length; i++) {
+    if (schedule[i].lcoe > 0 && schedule[i].lcoe < utilRate) { lcoeCrossMo = schedule[i].monthNum; break; }
+  }
+  if (lcoeCrossMo) {
+    var lcYr = (lcoeCrossMo / 12).toFixed(1);
+    kpi(lcYr + ' yr', 'LCOE < Utility Rate', 'good', 'Month ' + lcoeCrossMo);
+  }
+
+  // Current situation
+  var lastActual = null;
+  for (var i = schedule.length - 1; i >= 0; i--) {
+    if (schedule[i].isActual) { lastActual = schedule[i]; break; }
+  }
+  if (lastActual) {
+    kpi('$' + fmt(lastActual.helocBalance, 0), 'Current HELOC', 'warn', lastActual.date);
+    kpi('$' + fmt(lastActual.savings, 0), 'Net Position Now', lastActual.savings >= 0 ? 'good' : 'bad');
+  }
+
+  $('kpis').innerHTML = html;
+}
+
+// ============================================================
+//  Main cumulative chart
+// ============================================================
+function renderMainChart(schedule, breakevenMo, helocPayoffMo) {
+  if (mainChartObj) mainChartObj.destroy();
+
+  // Split into actual vs forecast segments
+  var labels = schedule.map(function(s) { return s.label; });
+  var noSolar = schedule.map(function(s) { return Math.round(s.cumNoSolar); });
+  var withSolarActual = schedule.map(function(s) { return s.isActual ? Math.round(s.cumWithSolar) : null; });
+  var withSolarForecast = [];
+  var savingsFill = [];
+
+  // Find transition point
+  var lastActualIdx = -1;
+  for (var i = schedule.length - 1; i >= 0; i--) {
+    if (schedule[i].isActual) { lastActualIdx = i; break; }
+  }
+
+  // Build forecast line that starts from the last actual point (for continuity)
+  for (var i = 0; i < schedule.length; i++) {
+    if (i === lastActualIdx) {
+      withSolarForecast.push(Math.round(schedule[i].cumWithSolar));
+    } else if (i > lastActualIdx) {
+      withSolarForecast.push(Math.round(schedule[i].cumWithSolar));
+    } else {
+      withSolarForecast.push(null);
+    }
+    savingsFill.push(Math.round(schedule[i].cumNoSolar));
+  }
+
+  // No-solar: solid for actual months, dashed for forecast
+  var noSolarActual = schedule.map(function(s) { return s.isActual ? Math.round(s.cumNoSolar) : null; });
+  var noSolarForecast = [];
+  for (var i = 0; i < schedule.length; i++) {
+    if (i === lastActualIdx) {
+      noSolarForecast.push(Math.round(schedule[i].cumNoSolar));
+    } else if (i > lastActualIdx) {
+      noSolarForecast.push(Math.round(schedule[i].cumNoSolar));
+    } else {
+      noSolarForecast.push(null);
+    }
+  }
+
+  var annotations = {};
+  if (breakevenMo && breakevenMo <= schedule.length) {
+    annotations.breakeven = {
+      type: 'line', xMin: breakevenMo - 1, xMax: breakevenMo - 1,
+      borderColor: '#22c55e', borderWidth: 2, borderDash: [6, 3],
+      label: { display: true, content: 'Breakeven Yr ' + (breakevenMo/12).toFixed(1),
+               position: 'start', backgroundColor: '#22c55e22', color: '#22c55e', font: { size: 10 } }
+    };
+  }
+  if (helocPayoffMo && helocPayoffMo <= schedule.length) {
+    annotations.payoff = {
+      type: 'line', xMin: helocPayoffMo - 1, xMax: helocPayoffMo - 1,
+      borderColor: '#38bdf8', borderWidth: 2, borderDash: [6, 3],
+      label: { display: true, content: 'HELOC Paid Off',
+               position: 'end', backgroundColor: '#38bdf822', color: '#38bdf8', font: { size: 10 } }
+    };
+  }
+
+  var axStyle = { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#1e293b' } };
+
+  mainChartObj = new Chart($('mainChart'), {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [
+        // No-solar actual (solid red)
+        { label: 'No Solar (actual)', data: noSolarActual,
+          borderColor: '#ef4444', borderWidth: 2.5, pointRadius: 0,
+          fill: false, tension: 0.2, spanGaps: false },
+        // No-solar forecast (dashed red)
+        { label: 'No Solar (forecast)', data: noSolarForecast,
+          borderColor: '#ef4444', borderWidth: 2, borderDash: [8, 4], pointRadius: 0,
+          fill: false, tension: 0.2, spanGaps: false },
+        // With-solar actual (solid green)
+        { label: 'With Solar (actual)', data: withSolarActual,
+          borderColor: '#22c55e', borderWidth: 2.5, pointRadius: 0,
+          fill: false, tension: 0.2, spanGaps: false },
+        // With-solar forecast (dashed green)
+        { label: 'With Solar (forecast)', data: withSolarForecast,
+          borderColor: '#22c55e', borderWidth: 2, borderDash: [8, 4], pointRadius: 0,
+          fill: false, tension: 0.2, spanGaps: false },
+        // Savings fill (between no-solar and with-solar)
+        { label: '_savfill', data: noSolar,
+          borderColor: 'transparent', borderWidth: 0, pointRadius: 0,
+          fill: false },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: true,
+          labels: {
+            color: '#94a3b8', boxWidth: 14, font: { size: 10 },
+            filter: function(item) { return !item.text.startsWith('_'); }
+          }
+        },
+        tooltip: {
+          callbacks: {
+            title: function(ctx) { return ctx[0].label; },
+            label: function(ctx) {
+              if (ctx.dataset.label.startsWith('_')) return null;
+              return ctx.dataset.label + ': $' + fmt(ctx.parsed.y, 0);
+            },
+            afterBody: function(ctx) {
+              var idx = ctx[0].dataIndex;
+              var s = schedule[idx];
+              return ['Net savings: $' + fmt(s.savings, 0),
+                      'HELOC: $' + fmt(s.helocBalance, 0),
+                      s.isActual ? '● Actual' : '◌ Forecast'];
+            }
+          }
+        },
+        annotation: { annotations: annotations }
+      },
+      scales: {
+        x: Object.assign({}, axStyle, {
+          ticks: { color: '#64748b', font: { size: 8 }, maxTicksLimit: 20,
+                   callback: function(val, idx) {
+                     var lbl = this.getLabelForValue(val);
+                     // Show year labels
+                     if (lbl && lbl.endsWith('-01')) return lbl.slice(0, 4);
+                     if (idx === 0) return lbl;
+                     return '';
+                   }
+          }
+        }),
+        y: Object.assign({}, axStyle, {
+          ticks: { color: '#64748b', font: { size: 9 },
+                   callback: function(v) { return '$' + (v >= 1000 ? (v/1000).toFixed(0) + 'k' : v); } },
+          title: { display: true, text: 'Cumulative Cost ($)', color: '#64748b' }
+        })
+      }
+    }
+  });
+}
+
+// ============================================================
+//  Cashflow chart (monthly)
+// ============================================================
+function renderCashflowChart(schedule) {
+  if (cashflowChartObj) cashflowChartObj.destroy();
+
+  // Downsample: show every 3rd month, or every month for first 24
+  var ds = schedule.filter(function(s, i) {
+    return i < 36 || i % 3 === 0 || i === schedule.length - 1;
+  });
+
+  var axStyle = { ticks: { color: '#64748b', font: { size: 8 } }, grid: { color: '#1e293b' } };
+
+  cashflowChartObj = new Chart($('cashflowChart'), {
+    type: 'bar',
+    data: {
+      labels: ds.map(function(s) { return s.label; }),
+      datasets: [
+        { label: 'No-Solar Bill', data: ds.map(function(s) { return Math.round(s.noSolarMonthly); }),
+          backgroundColor: ds.map(function(s) { return s.isActual ? '#ef444488' : '#ef444444'; }),
+          borderWidth: 0 },
+        { label: 'With-Solar Cost', data: ds.map(function(s) { return Math.round(s.withSolarMonthly); }),
+          backgroundColor: ds.map(function(s) { return s.isActual ? '#22c55e88' : '#22c55e44'; }),
+          borderWidth: 0 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { display: true, labels: { color: '#94a3b8', boxWidth: 10, font: { size: 9 } } } },
+      scales: {
+        x: Object.assign({}, axStyle, { ticks: { maxTicksLimit: 15, maxRotation: 45, font: { size: 7 } } }),
+        y: Object.assign({}, axStyle, {
+          ticks: { callback: function(v) { return '$' + v; } },
+          title: { display: true, text: '$/month', color: '#64748b' }
+        })
+      }
+    }
+  });
+}
+
+// ============================================================
+//  HELOC balance chart
+// ============================================================
+function renderHelocChart(schedule) {
+  if (helocChartObj) helocChartObj.destroy();
+
+  // Only show until HELOC is paid off + a few months buffer
+  var lastNonZero = 0;
+  schedule.forEach(function(s, i) { if (s.helocBalance > 0) lastNonZero = i; });
+  var cutoff = Math.min(lastNonZero + 12, schedule.length);
+  var ds = schedule.slice(0, cutoff);
+
+  var axStyle = { ticks: { color: '#64748b', font: { size: 8 } }, grid: { color: '#1e293b' } };
+
+  var balActual = ds.map(function(s) { return s.isActual ? Math.round(s.helocBalance) : null; });
+  var balForecast = [];
+  var lastActIdx = -1;
+  for (var i = ds.length - 1; i >= 0; i--) { if (ds[i].isActual) { lastActIdx = i; break; } }
+  for (var i = 0; i < ds.length; i++) {
+    if (i >= lastActIdx && !ds[i].isActual || i === lastActIdx) {
+      balForecast.push(Math.round(ds[i].helocBalance));
+    } else {
+      balForecast.push(null);
+    }
+  }
+
+  helocChartObj = new Chart($('helocChart'), {
+    type: 'line',
+    data: {
+      labels: ds.map(function(s) { return s.label; }),
+      datasets: [
+        { label: 'Balance (actual)', data: balActual,
+          borderColor: '#f59e0b', borderWidth: 2.5, pointRadius: 0,
+          fill: true, backgroundColor: '#f59e0b15', tension: 0.2, spanGaps: false },
+        { label: 'Balance (forecast)', data: balForecast,
+          borderColor: '#f59e0b', borderWidth: 2, borderDash: [8, 4], pointRadius: 0,
+          fill: true, backgroundColor: '#f59e0b08', tension: 0.2, spanGaps: false }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { display: true, labels: { color: '#94a3b8', boxWidth: 10, font: { size: 9 } } } },
+      scales: {
+        x: Object.assign({}, axStyle, { ticks: { maxTicksLimit: 12, maxRotation: 45, font: { size: 7 } } }),
+        y: Object.assign({}, axStyle, {
+          ticks: { callback: function(v) { return '$' + (v >= 1000 ? (v/1000).toFixed(0) + 'k' : v); } },
+          title: { display: true, text: 'HELOC Balance ($)', color: '#64748b' },
+          min: 0
+        })
+      }
+    }
+  });
+}
+
+// ============================================================
+//  Year-by-year summary table
+// ============================================================
+function renderYearTable(schedule, horizonYears) {
+  var tbody = $('yearTbody');
+  var html = '';
+
+  for (var yr = 0; yr < horizonYears; yr++) {
+    var start = yr * 12;
+    var end = Math.min(start + 12, schedule.length);
+    if (start >= schedule.length) break;
+
+    var yrNoSolar = 0, yrElecBill = 0, yrHelocPaid = 0, yrWithSolar = 0;
+    var hasActual = false, hasForecast = false;
+    var yrProduction = 0;
+
+    for (var m = start; m < end; m++) {
+      var s = schedule[m];
+      yrNoSolar += s.noSolarMonthly;
+      yrElecBill += s.electricBill;
+      yrHelocPaid += s.helocPaid;
+      yrWithSolar += s.withSolarMonthly;
+      yrProduction += s.production;
+      if (s.isActual) hasActual = true;
+      else hasForecast = true;
+    }
+
+    var type, rowClass;
+    if (hasActual && !hasForecast) { type = '● Actual'; rowClass = 'tbl-actual'; }
+    else if (hasActual && hasForecast) { type = '◐ Mixed'; rowClass = 'tbl-actual'; }
+    else { type = '◌ Forecast'; rowClass = 'tbl-forecast'; }
+
+    var lastOfYear = schedule[end - 1];
+    var annualSavings = yrNoSolar - yrWithSolar;
+
+    html += '<tr class="' + rowClass + '">' +
+      '<td>' + (yr + 1) + '</td>' +
+      '<td>' + type + '</td>' +
+      '<td>$' + fmt(yrNoSolar, 0) + '</td>' +
+      '<td>$' + fmt(yrElecBill, 0) + '</td>' +
+      '<td>$' + fmt(yrHelocPaid, 0) + '</td>' +
+      '<td>$' + fmt(yrWithSolar, 0) + '</td>' +
+      '<td style="color:' + (annualSavings >= 0 ? '#22c55e' : '#ef4444') + '">$' + fmt(annualSavings, 0) + '</td>' +
+      '<td>$' + fmt(lastOfYear.cumNoSolar, 0) + '</td>' +
+      '<td>$' + fmt(lastOfYear.cumWithSolar, 0) + '</td>' +
+      '<td style="color:' + (lastOfYear.savings >= 0 ? '#22c55e' : '#ef4444') + ';font-weight:600">$' + fmt(lastOfYear.savings, 0) + '</td>' +
+      '<td>$' + fmt(lastOfYear.lcoe, 3) + '</td>' +
+      '</tr>';
+  }
+
+  tbody.innerHTML = html;
+}
+
+// ============================================================
+//  Init
+// ============================================================
+init();
+</script>
+</body>
+</html>

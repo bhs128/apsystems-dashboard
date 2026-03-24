@@ -79,6 +79,11 @@ def clipping_analysis():
     return send_from_directory(SERVICE_DIR, 'solar_clipping.html')
 
 
+@app.route('/roi')
+def roi_page():
+    return send_from_directory(SERVICE_DIR, 'solar_roi.html')
+
+
 @app.route('/api/status')
 def api_status():
     tables = ['system_readings', 'daily_energy', 'panel_readings',
