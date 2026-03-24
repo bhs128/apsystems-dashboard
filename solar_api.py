@@ -74,6 +74,11 @@ def field_log():
     return send_from_directory(SERVICE_DIR, 'solar_field_log.html')
 
 
+@app.route('/clipping')
+def clipping_analysis():
+    return send_from_directory(SERVICE_DIR, 'solar_clipping.html')
+
+
 @app.route('/api/status')
 def api_status():
     tables = ['system_readings', 'daily_energy', 'panel_readings',

@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inverter Clipping Analysis</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #0f172a; color: #e2e8f0; padding: 1rem; max-width: 1400px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; color: #f59e0b; margin-bottom: 0.25rem; }
+  h2 { font-size: 1.1rem; color: #cbd5e1; margin-bottom: 0.75rem; }
+  h3 { font-size: 0.9rem; color: #f59e0b; margin-bottom: 0.5rem; }
+  .subtitle { color: #94a3b8; font-size: 0.8rem; margin-bottom: 1.5rem; }
+  .box { background: #1e293b; border-radius: 0.75rem; padding: 1rem; margin-bottom: 1rem; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
+  @media (max-width: 900px) { .row, .row3 { grid-template-columns: 1fr; } }
+  label { display: block; font-size: 0.75rem; color: #94a3b8; margin-bottom: 0.2rem;
+          text-transform: uppercase; letter-spacing: 0.04em; }
+  input, select { background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+    padding: 0.4rem 0.6rem; border-radius: 0.4rem; font-size: 0.85rem; width: 100%; margin-bottom: 0.5rem; }
+  input:focus, select:focus { border-color: #f59e0b; outline: none; }
+  button { border: none; padding: 0.45rem 1rem; border-radius: 0.4rem; cursor: pointer;
+           font-weight: 600; font-size: 0.8rem; }
+  .btn-primary { background: #f59e0b; color: #0f172a; }
+  .btn-primary:hover { background: #d97706; }
+  .btn-sm { padding: 0.25rem 0.6rem; font-size: 0.7rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+  th, td { padding: 0.35rem 0.5rem; text-align: left; border-bottom: 1px solid #334155; }
+  th { color: #94a3b8; font-weight: 600; font-size: 0.7rem; }
+  .card { text-align: center; padding: 0.75rem; }
+  .card .label { font-size: 0.65rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em; }
+  .card .value { font-size: 1.6rem; font-weight: 700; margin-top: 0.15rem; }
+  .card .unit { font-size: 0.7rem; color: #94a3b8; }
+  .amber { color: #f59e0b; }
+  .green { color: #22c55e; }
+  .red { color: #ef4444; }
+  .blue { color: #38bdf8; }
+  .purple { color: #a78bfa; }
+  canvas { max-height: 300px; }
+  .controls { display: flex; gap: 0.75rem; align-items: end; flex-wrap: wrap; margin-bottom: 0.75rem; }
+  .controls > div { min-width: 140px; }
+  .help { font-size: 0.7rem; color: #64748b; margin-top: 0.2rem; }
+  .loading { text-align: center; padding: 2rem; color: #64748b; }
+  .tab-bar { display: flex; gap: 0; margin-bottom: -1px; }
+  .tab { padding: 0.4rem 1rem; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+         border: 1px solid #334155; border-bottom: none; border-radius: 0.5rem 0.5rem 0 0;
+         color: #64748b; background: #0f172a; }
+  .tab.active { color: #f59e0b; background: #1e293b; border-color: #475569; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+  .clip-bar { display: inline-block; height: 10px; border-radius: 2px; }
+  .legend-item { display: inline-flex; align-items: center; gap: 0.3rem; margin-right: 1rem; font-size: 0.7rem; color: #94a3b8; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+</style>
+</head>
+<body>
+
+<h1>&#9889; Inverter Clipping Analysis</h1>
+<p class="subtitle">DS3-S per-channel DC telemetry &mdash; quantify power lost to inverter clipping (320W/ch)</p>
+
+<!-- Controls -->
+<div class="box">
+  <div class="controls">
+    <div>
+      <label>Date</label>
+      <div style="display:flex;gap:0.25rem">
+        <button class="btn-primary btn-sm" onclick="shiftDate(-1)" title="Previous day">&larr;</button>
+        <input type="date" id="ctrlDate" value="" style="flex:1">
+        <button class="btn-primary btn-sm" onclick="shiftDate(1)" title="Next day">&rarr;</button>
+      </div>
+    </div>
+    <div>
+      <label>Clip Threshold (W)</label>
+      <input type="number" id="ctrlClip" value="318" step="1" style="width:80px">
+    </div>
+    <div>
+      <label>Panel P<sub>max</sub> STC (W)</label>
+      <input type="number" id="ctrlPmax" value="410" step="1" style="width:80px">
+    </div>
+    <div>
+      <label>Temp Coeff (%/&deg;C)</label>
+      <input type="number" id="ctrlTC" value="-0.365" step="0.001" style="width:80px">
+    </div>
+    <div>
+      <button class="btn-primary" onclick="loadData()">Analyze</button>
+    </div>
+    <div id="statusMsg" style="font-size:0.7rem;color:#94a3b8;align-self:center"></div>
+  </div>
+</div>
+
+<!-- Summary Cards -->
+<div id="summarySection" style="display:none">
+  <div class="row" style="grid-template-columns: repeat(5, 1fr); margin-bottom: 1rem;">
+    <div class="box card">
+      <div class="label">AC Production</div>
+      <div class="value green" id="cardAC">—</div>
+      <div class="unit">kWh</div>
+    </div>
+    <div class="box card">
+      <div class="label">Estimated True DC</div>
+      <div class="value blue" id="cardTrueDC">—</div>
+      <div class="unit">kWh</div>
+    </div>
+    <div class="box card">
+      <div class="label">Clipping Loss</div>
+      <div class="value red" id="cardClipLoss">—</div>
+      <div class="unit">kWh</div>
+    </div>
+    <div class="box card">
+      <div class="label">Clip Duration</div>
+      <div class="value amber" id="cardClipTime">—</div>
+      <div class="unit">minutes (any ch)</div>
+    </div>
+    <div class="box card">
+      <div class="label">DC → AC Efficiency</div>
+      <div class="value purple" id="cardEff">—</div>
+      <div class="unit">%</div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tab-bar">
+    <div class="tab active" onclick="switchTab('overview')">System Overview</div>
+    <div class="tab" onclick="switchTab('channels')">Per-Channel Detail</div>
+    <div class="tab" onclick="switchTab('iv')">Voltage/Current</div>
+    <div class="tab" onclick="switchTab('table')">Data Table</div>
+  </div>
+
+  <!-- Tab 1: System Overview -->
+  <div class="box tab-content active" id="tab-overview" style="border-radius: 0 0.75rem 0.75rem 0.75rem">
+    <div class="row">
+      <div>
+        <h3>System Power Profile</h3>
+        <p class="help">Total AC power vs estimated true DC capability (without clipping)</p>
+        <canvas id="chartPowerProfile"></canvas>
+      </div>
+      <div>
+        <h3>Per-Channel Power Distribution</h3>
+        <p class="help">Histogram of all channel power readings — pile-up at clip limit shows energy left on the table</p>
+        <canvas id="chartHistogram"></canvas>
+      </div>
+    </div>
+    <div class="row" style="margin-top:1rem">
+      <div>
+        <h3>Clipping Loss Over Time</h3>
+        <p class="help">Instantaneous watts lost to clipping across all 20 channels</p>
+        <canvas id="chartClipLoss"></canvas>
+      </div>
+      <div>
+        <h3>Clipping Channels Over Time</h3>
+        <p class="help">Number of channels simultaneously clipping (out of 20)</p>
+        <canvas id="chartClipCount"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 2: Per-Channel Detail -->
+  <div class="box tab-content" id="tab-channels" style="border-radius: 0 0.75rem 0.75rem 0.75rem">
+    <h3>Per-Inverter Clipping Summary</h3>
+    <p class="help" style="margin-bottom:0.75rem">Each DS3-S has 2 channels (ch1, ch2). Clip limit = 320W per channel.</p>
+    <div style="overflow-x:auto">
+      <table id="inverterTable">
+        <thead>
+          <tr>
+            <th>Inverter</th>
+            <th>Ch</th>
+            <th>Peak DC (W)</th>
+            <th>Peak V×I (W)</th>
+            <th>Clip Intervals</th>
+            <th>Clip Minutes</th>
+            <th>Energy (Wh)</th>
+            <th>Est. Loss (Wh)</th>
+            <th>Clipping Timeline</th>
+          </tr>
+        </thead>
+        <tbody id="inverterBody"></tbody>
+      </table>
+    </div>
+    <div style="margin-top:1rem">
+      <h3>Per-Channel Power Curves</h3>
+      <canvas id="chartChannelCurves"></canvas>
+    </div>
+  </div>
+
+  <!-- Tab 3: Voltage/Current Analysis -->
+  <div class="box tab-content" id="tab-iv" style="border-radius: 0 0.75rem 0.75rem 0.75rem">
+    <div class="row">
+      <div>
+        <h3>DC Voltage vs DC Power</h3>
+        <p class="help">During clipping, the inverter shifts the operating voltage rightward (above Vmp) to limit power</p>
+        <canvas id="chartVvsP"></canvas>
+      </div>
+      <div>
+        <h3>DC Current vs DC Power</h3>
+        <p class="help">Current tracks irradiance — during clipping, current stays high while voltage shifts</p>
+        <canvas id="chartIvsP"></canvas>
+      </div>
+    </div>
+    <div class="row" style="margin-top:1rem">
+      <div>
+        <h3>V×I Product vs Reported Power</h3>
+        <p class="help">V×I diverges from reported DC power near the clip limit; the gap estimates lost power</p>
+        <canvas id="chartVIvsP"></canvas>
+      </div>
+      <div>
+        <h3>Inverter Temperature</h3>
+        <p class="help">Temperature rises during sustained high production — may trigger thermal derating</p>
+        <canvas id="chartTemp"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 4: Data Table -->
+  <div class="box tab-content" id="tab-table" style="border-radius: 0 0.75rem 0.75rem 0.75rem">
+    <div style="display:flex;justify-content:space-between;margin-bottom:0.5rem">
+      <h3 style="margin:0">Raw Telemetry (system totals per timestamp)</h3>
+      <button class="btn-primary btn-sm" onclick="exportCSV()">Export CSV</button>
+    </div>
+    <div style="overflow-x:auto;max-height:500px;overflow-y:auto">
+      <table id="rawTable">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>DC Total (W)</th>
+            <th>AC Total (W)</th>
+            <th>V×I Total (W)</th>
+            <th>Channels Clipping</th>
+            <th>Est. Clip Loss (W)</th>
+            <th>DC→AC Eff</th>
+          </tr>
+        </thead>
+        <tbody id="rawBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="loadingMsg" class="loading" style="display:none">Loading telemetry data...</div>
+<div id="emptyMsg" class="loading" style="display:none">
+  No inverter telemetry data found for this date.<br>
+  <span class="help">Run <code>python3 solar_sync.py --telemetry</code> to pull telemetry from the EMA API.</span>
+</div>
+
+<script>
+// ============================================================
+//  Config & state
+// ============================================================
+var CACHE = {};
+var CHARTS = {};
+
+// System constants
+var NUM_PANELS = 20;  // 10 inverters x 2 channels
+var CLIP_LIMIT = 320; // DS3-S per-channel AC clip (W)
+
+// Panel specs (from site config)
+var PANEL_VMP_STC = 34.0;   // Vmp at STC (V)
+var PANEL_IMP_STC = 12.06;  // Imp at STC (A) — 410W/34V
+var BETA_VOC = -0.0028;     // Voc temp coeff (/°C)
+
+// ============================================================
+//  API helper
+// ============================================================
+async function fetchTelemetry(date) {
+  var url = '/api/inverter_telemetry?start=' + encodeURIComponent(date) + '&end=' + encodeURIComponent(date);
+  var resp = await fetch(url);
+  if (!resp.ok) throw new Error('API error: ' + resp.status);
+  return resp.json();
+}
+
+// ============================================================
+//  Core analysis
+// ============================================================
+function analyzeTelemetry(rows, clipThreshold) {
+  // Group by timestamp
+  var byTime = {};
+  var inverters = {};
+  rows.forEach(function(r) {
+    var ts = r.timestamp;
+    if (!byTime[ts]) byTime[ts] = [];
+    byTime[ts].push(r);
+    inverters[r.inverter_uid] = true;
+  });
+
+  var timestamps = Object.keys(byTime).sort();
+  var inverterUIDs = Object.keys(inverters).sort();
+
+  // Per-timestamp system totals
+  var systemData = timestamps.map(function(ts) {
+    var group = byTime[ts];
+    var dcTotal = 0, acTotal = 0, viTotal = 0, clipCount = 0, clipLoss = 0;
+    group.forEach(function(r) {
+      var p1 = r.dc_p1 || 0, p2 = r.dc_p2 || 0;
+      var v1 = r.dc_v1 || 0, v2 = r.dc_v2 || 0;
+      var i1 = r.dc_i1 || 0, i2 = r.dc_i2 || 0;
+      dcTotal += p1 + p2;
+      acTotal += r.ac_p || 0;
+      viTotal += v1 * i1 + v2 * i2;
+      if (p1 >= clipThreshold) { clipCount++; clipLoss += v1 * i1 - p1; }
+      if (p2 >= clipThreshold) { clipCount++; clipLoss += v2 * i2 - p2; }
+    });
+    return {
+      ts: ts,
+      time: ts.slice(11, 16),
+      dcTotal: dcTotal,
+      acTotal: acTotal,
+      viTotal: Math.round(viTotal),
+      clipCount: clipCount,
+      clipLoss: Math.max(0, Math.round(clipLoss))
+    };
+  });
+
+  // Overall summaries
+  var totalAC_Wh = 0, totalDC_Wh = 0, totalVI_Wh = 0, totalClipLoss_Wh = 0;
+  var clipIntervals = 0;
+  systemData.forEach(function(d) {
+    totalAC_Wh += d.acTotal * 5 / 60;
+    totalDC_Wh += d.dcTotal * 5 / 60;
+    totalVI_Wh += d.viTotal * 5 / 60;
+    totalClipLoss_Wh += d.clipLoss * 5 / 60;
+    if (d.clipCount > 0) clipIntervals++;
+  });
+
+  // Per-inverter-channel stats
+  var channelStats = [];
+  inverterUIDs.forEach(function(uid) {
+    [1, 2].forEach(function(ch) {
+      var peakDC = 0, peakVI = 0, energy = 0, clipInterv = 0, lossWh = 0;
+      var timeline = [];
+      timestamps.forEach(function(ts) {
+        var r = byTime[ts].find(function(x) { return x.inverter_uid === uid; });
+        if (!r) return;
+        var p = ch === 1 ? (r.dc_p1 || 0) : (r.dc_p2 || 0);
+        var v = ch === 1 ? (r.dc_v1 || 0) : (r.dc_v2 || 0);
+        var i = ch === 1 ? (r.dc_i1 || 0) : (r.dc_i2 || 0);
+        var vi = v * i;
+        if (p > peakDC) peakDC = p;
+        if (vi > peakVI) peakVI = vi;
+        energy += p * 5 / 60;
+        var clipping = p >= clipThreshold;
+        if (clipping) {
+          clipInterv++;
+          lossWh += Math.max(0, vi - p) * 5 / 60;
+        }
+        timeline.push({ time: ts.slice(11, 16), power: p, clipping: clipping });
+      });
+      channelStats.push({
+        uid: uid,
+        uidShort: uid.slice(-4),
+        ch: ch,
+        peakDC: Math.round(peakDC),
+        peakVI: Math.round(peakVI),
+        clipIntervals: clipInterv,
+        clipMinutes: clipInterv * 5,
+        energyWh: Math.round(energy),
+        lossWh: Math.round(lossWh),
+        timeline: timeline
+      });
+    });
+  });
+
+  // All individual readings (for scatter plots)
+  var allReadings = [];
+  rows.forEach(function(r) {
+    if (r.dc_p1 > 0) {
+      allReadings.push({
+        p: r.dc_p1, v: r.dc_v1, i: r.dc_i1, vi: r.dc_v1 * r.dc_i1,
+        clipping: r.dc_p1 >= clipThreshold, temp: r.ac_t, ts: r.timestamp
+      });
+    }
+    if (r.dc_p2 > 0) {
+      allReadings.push({
+        p: r.dc_p2, v: r.dc_v2, i: r.dc_i2, vi: r.dc_v2 * r.dc_i2,
+        clipping: r.dc_p2 >= clipThreshold, temp: r.ac_t, ts: r.timestamp
+      });
+    }
+  });
+
+  return {
+    timestamps: timestamps,
+    systemData: systemData,
+    channelStats: channelStats,
+    allReadings: allReadings,
+    inverterUIDs: inverterUIDs,
+    totalAC_kWh: totalAC_Wh / 1000,
+    totalDC_kWh: totalDC_Wh / 1000,
+    totalVI_kWh: totalVI_Wh / 1000,
+    totalClipLoss_kWh: totalClipLoss_Wh / 1000,
+    clipIntervals: clipIntervals,
+    dcToAcEff: totalDC_Wh > 0 ? totalAC_Wh / totalDC_Wh * 100 : 0
+  };
+}
+
+// ============================================================
+//  Load & render
+// ============================================================
+async function loadData() {
+  var date = document.getElementById('ctrlDate').value;
+  if (!date) { setStatus('Select a date', true); return; }
+  var clipThreshold = parseFloat(document.getElementById('ctrlClip').value) || 318;
+
+  setStatus('Loading...', false);
+  document.getElementById('loadingMsg').style.display = '';
+  document.getElementById('summarySection').style.display = 'none';
+  document.getElementById('emptyMsg').style.display = 'none';
+
+  try {
+    var rows = await fetchTelemetry(date);
+    document.getElementById('loadingMsg').style.display = 'none';
+
+    if (!rows || !rows.length) {
+      document.getElementById('emptyMsg').style.display = '';
+      setStatus('No data for ' + date, true);
+      return;
+    }
+
+    var analysis = analyzeTelemetry(rows, clipThreshold);
+    CACHE.analysis = analysis;
+    CACHE.rows = rows;
+
+    renderSummary(analysis);
+    renderPowerProfile(analysis);
+    renderHistogram(analysis);
+    renderClipLoss(analysis);
+    renderClipCount(analysis);
+    renderInverterTable(analysis);
+    renderChannelCurves(analysis);
+    renderVvsP(analysis);
+    renderIvsP(analysis);
+    renderVIvsP(analysis);
+    renderTemp(analysis);
+    renderRawTable(analysis);
+
+    document.getElementById('summarySection').style.display = '';
+    setStatus(rows.length + ' rows, ' + analysis.inverterUIDs.length + ' inverters', false);
+  } catch(e) {
+    document.getElementById('loadingMsg').style.display = 'none';
+    setStatus('Error: ' + e.message, true);
+  }
+}
+
+function setStatus(msg, isError) {
+  var el = document.getElementById('statusMsg');
+  el.textContent = msg;
+  el.style.color = isError ? '#ef4444' : '#94a3b8';
+}
+
+// ============================================================
+//  Summary cards
+// ============================================================
+function renderSummary(a) {
+  document.getElementById('cardAC').textContent = a.totalAC_kWh.toFixed(2);
+  document.getElementById('cardTrueDC').textContent = a.totalVI_kWh.toFixed(2);
+  document.getElementById('cardClipLoss').textContent = a.totalClipLoss_kWh.toFixed(2);
+  document.getElementById('cardClipTime').textContent = a.clipIntervals * 5;
+  document.getElementById('cardEff').textContent = a.dcToAcEff.toFixed(1);
+}
+
+// ============================================================
+//  Charts
+// ============================================================
+var axisStyle = { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: '#1e293b44' } };
+var noLegend = { plugins: { legend: { display: false } } };
+var smallLegend = { plugins: { legend: { display: true, labels: { color: '#94a3b8', boxWidth: 10, font: { size: 9 } } } } };
+var AMBER = '#f59e0b', RED = '#ef4444', GREEN = '#22c55e', BLUE = '#38bdf8', PURPLE = '#a78bfa';
+
+function destroyChart(key) {
+  if (CHARTS[key]) { CHARTS[key].destroy(); CHARTS[key] = null; }
+}
+
+// --- System Power Profile ---
+function renderPowerProfile(a) {
+  destroyChart('powerProfile');
+  var labels = a.systemData.map(function(d) { return d.time; });
+  CHARTS.powerProfile = new Chart(document.getElementById('chartPowerProfile'), {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: 'AC Power (W)',
+          data: a.systemData.map(function(d) { return d.acTotal; }),
+          borderColor: GREEN, borderWidth: 2, pointRadius: 0, fill: false, tension: 0.3
+        },
+        {
+          label: 'Reported DC (W)',
+          data: a.systemData.map(function(d) { return d.dcTotal; }),
+          borderColor: BLUE, borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.3
+        },
+        {
+          label: 'V×I Estimate (W)',
+          data: a.systemData.map(function(d) { return d.viTotal; }),
+          borderColor: PURPLE, borderWidth: 1.5, borderDash: [4, 2], pointRadius: 0, fill: false, tension: 0.3
+        },
+        {
+          label: 'System Clip Limit (6400W)',
+          data: a.systemData.map(function() { return CLIP_LIMIT * NUM_PANELS; }),
+          borderColor: RED + '66', borderWidth: 1, borderDash: [6, 3], pointRadius: 0, fill: false
+        }
+      ]
+    },
+    options: Object.assign({}, smallLegend, { animation: false,
+      scales: {
+        x: Object.assign({}, axisStyle, { ticks: { maxTicksLimit: 12 } }),
+        y: Object.assign({}, axisStyle, { title: { display: true, text: 'Watts', color: '#64748b' } })
+      }
+    })
+  });
+}
+
+// --- Histogram ---
+function renderHistogram(a) {
+  destroyChart('histogram');
+  // Bin all channel readings into 20W bins
+  var binSize = 20, maxBin = 420;
+  var bins = [];
+  for (var b = 0; b < maxBin; b += binSize) bins.push({ lo: b, hi: b + binSize, count: 0, clipCount: 0 });
+  a.allReadings.forEach(function(r) {
+    var idx = Math.min(Math.floor(r.p / binSize), bins.length - 1);
+    bins[idx].count++;
+    if (r.clipping) bins[idx].clipCount++;
+  });
+
+  CHARTS.histogram = new Chart(document.getElementById('chartHistogram'), {
+    type: 'bar',
+    data: {
+      labels: bins.map(function(b) { return b.lo + '-' + b.hi; }),
+      datasets: [
+        {
+          label: 'Normal',
+          data: bins.map(function(b) { return b.count - b.clipCount; }),
+          backgroundColor: BLUE + '88'
+        },
+        {
+          label: 'Clipping',
+          data: bins.map(function(b) { return b.clipCount; }),
+          backgroundColor: RED + '88'
+        }
+      ]
+    },
+    options: {
+      animation: false,
+      plugins: { legend: { display: true, labels: { color: '#94a3b8', boxWidth: 10, font: { size: 9 } } } },
+      scales: {
+        x: Object.assign({}, axisStyle, { stacked: true, title: { display: true, text: 'DC Power (W)', color: '#64748b' } }),
+        y: Object.assign({}, axisStyle, { stacked: true, title: { display: true, text: 'Count', color: '#64748b' } })
+      }
+    }
+  });
+}
+
+// --- Clipping Loss ---
+function renderClipLoss(a) {
+  destroyChart('clipLoss');
+  CHARTS.clipLoss = new Chart(document.getElementById('chartClipLoss'), {
+    type: 'bar',
+    data: {
+      labels: a.systemData.map(function(d) { return d.time; }),
+      datasets: [{
+        label: 'Clip Loss (W)',
+        data: a.systemData.map(function(d) { return d.clipLoss; }),
+        backgroundColor: a.systemData.map(function(d) { return d.clipLoss > 0 ? RED + '88' : '#33415522'; }),
+        borderWidth: 0
+      }]
+    },
+    options: Object.assign({}, noLegend, { animation: false,
+      scales: {
+        x: Object.assign({}, axisStyle, { ticks: { maxTicksLimit: 12 } }),
+        y: Object.assign({}, axisStyle, { title: { display: true, text: 'Watts Lost', color: '#64748b' } })
+      }
+    })
+  });
+}
+
+// --- Clip Count ---
+function renderClipCount(a) {
+  destroyChart('clipCount');
+  CHARTS.clipCount = new Chart(document.getElementById('chartClipCount'), {
+    type: 'bar',
+    data: {
+      labels: a.systemData.map(function(d) { return d.time; }),
+      datasets: [{
+        label: 'Channels Clipping',
+        data: a.systemData.map(function(d) { return d.clipCount; }),
+        backgroundColor: a.systemData.map(function(d) {
+          return d.clipCount >= 15 ? RED + '88' : d.clipCount >= 5 ? AMBER + '88' : d.clipCount > 0 ? BLUE + '44' : '#33415522';
+        }),
+        borderWidth: 0
+      }]
+    },
+    options: Object.assign({}, noLegend, { animation: false,
+      scales: {
+        x: Object.assign({}, axisStyle, { ticks: { maxTicksLimit: 12 } }),
+        y: Object.assign({}, axisStyle, {
+          title: { display: true, text: 'Channels (of 20)', color: '#64748b' },
+          max: 20
+        })
+      }
+    })
+  });
+}
+
+// --- Per-inverter table ---
+function renderInverterTable(a) {
+  var tbody = document.getElementById('inverterBody');
+  var html = '';
+  a.channelStats.forEach(function(cs) {
+    // Mini timeline: map 1px per interval, colored
+    var barHtml = '<div style="display:flex;gap:1px">';
+    cs.timeline.forEach(function(t) {
+      var color = t.power <= 0 ? '#1e293b' : t.clipping ? '#ef4444' : '#22c55e88';
+      barHtml += '<div style="width:2px;height:10px;background:' + color + ';border-radius:1px"></div>';
+    });
+    barHtml += '</div>';
+
+    html += '<tr>' +
+      '<td style="font-family:monospace;font-size:0.7rem">' + cs.uidShort + '</td>' +
+      '<td>' + cs.ch + '</td>' +
+      '<td>' + cs.peakDC + '</td>' +
+      '<td>' + cs.peakVI + '</td>' +
+      '<td>' + cs.clipIntervals + '</td>' +
+      '<td>' + cs.clipMinutes + '</td>' +
+      '<td>' + cs.energyWh + '</td>' +
+      '<td style="color:' + (cs.lossWh > 0 ? '#ef4444' : '#94a3b8') + '">' + cs.lossWh + '</td>' +
+      '<td style="min-width:120px">' + barHtml + '</td>' +
+      '</tr>';
+  });
+  tbody.innerHTML = html;
+}
+
+// --- Channel curves ---
+function renderChannelCurves(a) {
+  destroyChart('channelCurves');
+  var timestamps = a.systemData.map(function(d) { return d.time; });
+  // Show top 4 inverters by peak power
+  var sorted = a.channelStats.slice().sort(function(x, y) { return y.peakDC - x.peakDC; });
+  var colors = [AMBER, GREEN, BLUE, PURPLE, '#fb923c', '#e879f9', '#22d3ee', '#a3e635'];
+  var datasets = [];
+  var shown = {};
+  sorted.forEach(function(cs) {
+    if (Object.keys(shown).length >= 4) return;
+    if (shown[cs.uid]) return;
+    shown[cs.uid] = true;
+    datasets.push({
+      label: cs.uidShort + ' ch' + cs.ch,
+      data: cs.timeline.map(function(t) { return t.power || null; }),
+      borderColor: colors[datasets.length % colors.length],
+      borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.3
+    });
+  });
+  // Add clip line
+  datasets.push({
+    label: 'Clip (320W)',
+    data: timestamps.map(function() { return CLIP_LIMIT; }),
+    borderColor: RED + '66', borderWidth: 1, borderDash: [6, 3], pointRadius: 0, fill: false
+  });
+
+  CHARTS.channelCurves = new Chart(document.getElementById('chartChannelCurves'), {
+    type: 'line',
+    data: { labels: timestamps, datasets: datasets },
+    options: Object.assign({}, smallLegend, { animation: false,
+      scales: {
+        x: Object.assign({}, axisStyle, { ticks: { maxTicksLimit: 12 } }),
+        y: Object.assign({}, axisStyle, { title: { display: true, text: 'DC Power (W)', color: '#64748b' } })
+      }
+    })
+  });
+}
+
+// --- V vs P scatter ---
+function renderVvsP(a) {
+  destroyChart('vvsP');
+  // Downsample if too many points
+  var pts = a.allReadings;
+  CHARTS.vvsP = new Chart(document.getElementById('chartVvsP'), {
+    type: 'scatter',
+    data: {
+      datasets: [
+        {
+          label: 'Normal',
+          data: pts.filter(function(r) { return !r.clipping; }).map(function(r) { return { x: r.v, y: r.p }; }),
+          backgroundColor: BLUE + '44', borderColor: BLUE, pointRadius: 2.5
+        },
+        {
+          label: 'Clipping',
+          data: pts.filter(function(r) { return r.clipping; }).map(function(r) { return { x: r.v, y: r.p }; }),
+          backgroundColor: RED + '88', borderColor: RED, pointRadius: 3
+        }
+      ]
+    },
+    options: Object.assign({}, smallLegend, { animation: false,
+      scales: {
+        x: Object.assign({}, axisStyle, { title: { display: true, text: 'DC Voltage (V)', color: '#64748b' } }),
+        y: Object.assign({}, axisStyle, { title: { display: true, text: 'DC Power (W)', color: '#64748b' } })
+      }
+    })
+  });
+}
+
+// --- I vs P scatter ---
+function renderIvsP(a) {
+  destroyChart('ivsP');
+  var pts = a.allReadings;
+  CHARTS.ivsP = new Chart(document.getElementById('chartIvsP'), {
+    type: 'scatter',
+    data: {
+      datasets: [
+        {
+          label: 'Normal',
+          data: pts.filter(function(r) { return !r.clipping; }).map(function(r) { return { x: r.i, y: r.p }; }),
+          backgroundColor: BLUE + '44', borderColor: BLUE, pointRadius: 2.5
+        },
+        {
+          label: 'Clipping',
+          data: pts.filter(function(r) { return r.clipping; }).map(function(r) { return { x: r.i, y: r.p }; }),
+          backgroundColor: RED + '88', borderColor: RED, pointRadius: 3
+        }
+      ]
+    },
+    options: Object.assign({}, smallLegend, { animation: false,
+      scales: {
+        x: Object.assign({}, axisStyle, { title: { display: true, text: 'DC Current (A)', color: '#64748b' } }),
+        y: Object.assign({}, axisStyle, { title: { display: true, text: 'DC Power (W)', color: '#64748b' } })
+      }
+    })
+  });
+}
+
+// --- V×I vs reported P ---
+function renderVIvsP(a) {
+  destroyChart('vivsP');
+  var pts = a.allReadings;
+  CHARTS.vivsP = new Chart(document.getElementById('chartVIvsP'), {
+    type: 'scatter',
+    data: {
+      datasets: [
+        {
+          label: 'Normal',
+          data: pts.filter(function(r) { return !r.clipping; }).map(function(r) { return { x: r.p, y: r.vi }; }),
+          backgroundColor: BLUE + '44', borderColor: BLUE, pointRadius: 2.5
+        },
+        {
+          label: 'Clipping',
+          data: pts.filter(function(r) { return r.clipping; }).map(function(r) { return { x: r.p, y: r.vi }; }),
+          backgroundColor: RED + '88', borderColor: RED, pointRadius: 3
+        },
+        {
+          label: '1:1 line',
+          data: [{ x: 0, y: 0 }, { x: 350, y: 350 }],
+          borderColor: '#64748b', borderWidth: 1, borderDash: [4, 3],
+          pointRadius: 0, type: 'line', fill: false, showLine: true
+        }
+      ]
+    },
+    options: Object.assign({}, smallLegend, { animation: false,
+      scales: {
+        x: Object.assign({}, axisStyle, { title: { display: true, text: 'Reported DC Power (W)', color: '#64748b' } }),
+        y: Object.assign({}, axisStyle, { title: { display: true, text: 'V×I Product (W)', color: '#64748b' } })
+      }
+    })
+  });
+}
+
+// --- Temperature ---
+function renderTemp(a) {
+  destroyChart('temp');
+  // One line per inverter
+  var byUID = {};
+  var rows = CACHE.rows;
+  rows.forEach(function(r) {
+    var uid = r.inverter_uid.slice(-4);
+    if (!byUID[uid]) byUID[uid] = {};
+    byUID[uid][r.timestamp.slice(11, 16)] = r.ac_t;
+  });
+  var times = a.systemData.map(function(d) { return d.time; });
+  var colors = [AMBER, GREEN, BLUE, PURPLE, '#fb923c', '#e879f9', '#22d3ee', '#a3e635', '#f43f5e', '#14b8a6'];
+  var datasets = Object.keys(byUID).map(function(uid, idx) {
+    return {
+      label: uid,
+      data: times.map(function(t) { return byUID[uid][t] || null; }),
+      borderColor: colors[idx % colors.length],
+      borderWidth: 1.2, pointRadius: 0, fill: false, tension: 0.3
+    };
+  });
+  CHARTS.temp = new Chart(document.getElementById('chartTemp'), {
+    type: 'line',
+    data: { labels: times, datasets: datasets },
+    options: Object.assign({}, smallLegend, { animation: false,
+      scales: {
+        x: Object.assign({}, axisStyle, { ticks: { maxTicksLimit: 12 } }),
+        y: Object.assign({}, axisStyle, { title: { display: true, text: '°C', color: '#64748b' } })
+      }
+    })
+  });
+}
+
+// --- Raw table ---
+function renderRawTable(a) {
+  var tbody = document.getElementById('rawBody');
+  var html = '';
+  a.systemData.forEach(function(d) {
+    var effPct = d.dcTotal > 0 ? (d.acTotal / d.dcTotal * 100).toFixed(1) : '—';
+    var lossColor = d.clipLoss > 0 ? '#ef4444' : '#94a3b8';
+    html += '<tr>' +
+      '<td>' + d.time + '</td>' +
+      '<td>' + Math.round(d.dcTotal) + '</td>' +
+      '<td>' + Math.round(d.acTotal) + '</td>' +
+      '<td>' + d.viTotal + '</td>' +
+      '<td style="color:' + (d.clipCount > 0 ? '#f59e0b' : '#94a3b8') + '">' +
+        d.clipCount + '/20</td>' +
+      '<td style="color:' + lossColor + '">' + d.clipLoss + '</td>' +
+      '<td>' + effPct + '%</td>' +
+      '</tr>';
+  });
+  tbody.innerHTML = html;
+}
+
+// ============================================================
+//  Export
+// ============================================================
+function exportCSV() {
+  var a = CACHE.analysis;
+  if (!a) return;
+  var headers = ['timestamp', 'dc_total_w', 'ac_total_w', 'vi_total_w',
+    'channels_clipping', 'clip_loss_w', 'dc_ac_eff_pct'];
+  var rows = [headers.join(',')];
+  a.systemData.forEach(function(d) {
+    rows.push([
+      d.ts, Math.round(d.dcTotal), Math.round(d.acTotal), d.viTotal,
+      d.clipCount, d.clipLoss,
+      d.dcTotal > 0 ? (d.acTotal / d.dcTotal * 100).toFixed(1) : ''
+    ].join(','));
+  });
+  var blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+  var anchor = document.createElement('a');
+  anchor.href = URL.createObjectURL(blob);
+  anchor.download = 'clipping_analysis_' + document.getElementById('ctrlDate').value + '.csv';
+  anchor.click();
+  URL.revokeObjectURL(anchor.href);
+}
+
+// ============================================================
+//  Tab switching
+// ============================================================
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(function(t, i) {
+    var tabName = ['overview', 'channels', 'iv', 'table'][i];
+    t.classList.toggle('active', tabName === name);
+  });
+  document.querySelectorAll('.tab-content').forEach(function(c) {
+    c.classList.toggle('active', c.id === 'tab-' + name);
+  });
+}
+
+// ============================================================
+//  Init: set date to today or latest available
+// ============================================================
+function shiftDate(delta) {
+  var el = document.getElementById('ctrlDate');
+  var d = new Date(el.value + 'T12:00:00');
+  d.setDate(d.getDate() + delta);
+  el.value = d.toISOString().slice(0, 10);
+  loadData();
+}
+
+(async function() {
+  // Try to get available dates from the status endpoint
+  try {
+    var resp = await fetch('/api/status');
+    var status = await resp.json();
+    var telem = status.tables && status.tables.inverter_telemetry;
+    if (telem && telem.max) {
+      var maxDate = telem.max.slice(0, 10);
+      document.getElementById('ctrlDate').value = maxDate;
+      loadData();
+    }
+  } catch(e) {
+    var today = new Date().toISOString().slice(0, 10);
+    document.getElementById('ctrlDate').value = today;
+  }
+})();
+</script>
+</body>
+</html>
