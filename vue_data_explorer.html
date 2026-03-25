@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Emporia VUE Data Export Explorer</title>
+<style>
+  :root {
+    --bg: #1a1a2e; --surface: #16213e; --card: #0f3460;
+    --text: #e0e0e0; --muted: #8892b0; --accent: #00d2ff;
+    --green: #00e676; --yellow: #ffd740; --red: #ff5252; --orange: #ff9100;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); padding: 20px; }
+  h1 { color: var(--accent); margin-bottom: 4px; font-size: 1.6em; }
+  .subtitle { color: var(--muted); margin-bottom: 24px; font-size: 0.95em; }
+  h2 { color: var(--accent); margin: 28px 0 12px; font-size: 1.2em; border-bottom: 1px solid #333; padding-bottom: 6px; }
+  h3 { color: var(--green); margin: 16px 0 8px; font-size: 1.05em; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 16px 0; }
+  .kpi { background: var(--card); border-radius: 10px; padding: 16px; text-align: center; }
+  .kpi .val { font-size: 2em; font-weight: 700; color: var(--accent); }
+  .kpi .label { color: var(--muted); font-size: 0.85em; margin-top: 4px; }
+
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.88em; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #222; }
+  th { background: var(--card); color: var(--accent); font-weight: 600; position: sticky; top: 0; }
+  tr:hover { background: rgba(0,210,255,0.05); }
+  .good { color: var(--green); }
+  .warn { color: var(--yellow); }
+  .bad { color: var(--red); }
+  .partial { color: var(--orange); }
+
+  .timeline-container { margin: 16px 0; overflow-x: auto; }
+  .timeline-row { display: flex; align-items: center; margin: 6px 0; }
+  .timeline-label { width: 60px; font-size: 0.85em; color: var(--muted); flex-shrink: 0; }
+  .timeline-track { flex: 1; height: 24px; background: #111; border-radius: 4px; position: relative; overflow: hidden; }
+  .timeline-block { position: absolute; height: 100%; border-radius: 2px; min-width: 2px; }
+  .timeline-block.solar { background: rgba(0,210,255,0.6); }
+  .timeline-block.breaker { background: rgba(0,230,118,0.6); }
+  .timeline-block.combined { background: rgba(255,151,0,0.6); }
+  .timeline-gap { position: absolute; height: 100%; background: repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(255,82,82,0.3) 3px, rgba(255,82,82,0.3) 6px); }
+
+  .gap-table td:first-child { font-family: monospace; font-size: 0.82em; }
+  .section { background: var(--surface); border-radius: 12px; padding: 20px; margin: 16px 0; }
+  .col-list { font-family: monospace; font-size: 0.82em; color: var(--muted); line-height: 1.6; column-count: 2; column-gap: 20px; }
+  .col-list .solar-col { color: var(--accent); }
+  .col-list .breaker-col { color: var(--green); }
+
+  .legend { display: flex; gap: 20px; margin: 8px 0 16px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.85em; color: var(--muted); }
+  .legend-swatch { width: 16px; height: 12px; border-radius: 2px; }
+
+  .note { background: rgba(255,215,64,0.1); border-left: 3px solid var(--yellow); padding: 10px 14px; margin: 12px 0; border-radius: 0 6px 6px 0; font-size: 0.9em; }
+  .note strong { color: var(--yellow); }
+
+  details { margin: 8px 0; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 0.9em; }
+  details summary:hover { text-decoration: underline; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.78em; font-weight: 600; margin-right: 4px; }
+  .tag-solar { background: rgba(0,210,255,0.2); color: var(--accent); }
+  .tag-breaker { background: rgba(0,230,118,0.2); color: var(--green); }
+  .tag-combined { background: rgba(255,151,0,0.2); color: var(--orange); }
+</style>
+</head>
+<body>
+
+<h1>Emporia VUE Data Export Explorer</h1>
+<p class="subtitle">Analysis of manual data exports from VUE web app &bull; Generated 2026-03-24</p>
+
+<div class="section">
+<h2>Overview</h2>
+<div class="grid">
+  <div class="kpi"><div class="val">19</div><div class="label">ZIP exports analyzed</div></div>
+  <div class="kpi"><div class="val">82,056</div><div class="label">Total 15min rows in DB</div></div>
+  <div class="kpi"><div class="val">2</div><div class="label">VUE monitors</div></div>
+  <div class="kpi"><div class="val">2 eras</div><div class="label">100A Panel (2021) + Solar (2024)</div></div>
+</div>
+
+<div class="note">
+  <strong>Two-era dataset:</strong> Device 33555 (B880A4) was originally the <strong>100A Panel</strong> monitoring home circuits
+  (May 2021 → May 2022, 355 days continuous). It was later repurposed as the <strong>Solar Combiner Panel</strong> when solar was installed
+  (Nov 2024 → present). There is a <strong>~30-month gap</strong> between eras when the VUE was offline.
+</div>
+
+<div class="note">
+  <strong>Combined Monitor Update:</strong> Around March 2025, VUE software was updated to combine both monitors.
+  The Breaker Box export (device 385843) grew from <strong>19 columns</strong> to <strong>36 columns</strong>,
+  embedding Solar Combiner Panel data alongside Breaker Box circuit data. This transition affects merging strategy.
+</div>
+</div>
+
+<!-- DEVICE SUMMARIES -->
+
+<!-- OLD ERA: 100A Panel -->
+<div class="section">
+<h2><span class="tag" style="background:rgba(156,39,176,0.2);color:#ce93d8">LEGACY</span> 100A Panel (B880A4, device 33555) — Pre-Solar Era</h2>
+<p style="color:var(--muted);font-size:0.9em">8 export ZIPs &bull; 11 columns per CSV &bull; Same hardware, different circuit assignments &bull; May 2021 → May 2022</p>
+
+<div class="note">
+  <strong>History:</strong> Before solar installation, device 33555 was the <strong>100A Panel</strong> monitoring home circuits via 10 CTs:
+  Mains A/B, Laundry Room, A/C, Upstairs Bedrooms, Stove, Furnace, Living Room, Garage/Bath, and Fridge.
+  These map to the same physical breaker positions later monitored by the Breaker Box (device 385843).
+  The VUE was taken offline around May 2022 and later reconfigured as the Solar Combiner Panel in November 2024.
+</div>
+
+<h3>Deduplicated Coverage (15MIN only)</h3>
+<table>
+  <tr><th>Scale</th><th>Date Range</th><th>Span</th><th>Unique Rows</th><th>Expected</th><th>Coverage</th><th>Gaps</th><th>Status</th></tr>
+  <tr>
+    <td>15MIN</td><td>2021-05-30 → 2022-05-20</td><td>355 d</td>
+    <td>34,074</td><td>34,074</td><td class="good">100.0%</td><td>0</td>
+    <td class="good">Complete — Zero gaps</td>
+  </tr>
+</table>
+
+<h3>Column Mapping (Old → Current)</h3>
+<table>
+  <tr><th>Old (100A Panel) Column</th><th>Breaker Position</th><th>DB Column</th></tr>
+  <tr><td>100A Panel_1</td><td>Mains A</td><td>grid_mains_a_kw</td></tr>
+  <tr><td>100A Panel_2</td><td>Mains B</td><td>grid_mains_b_kw</td></tr>
+  <tr><td>Laundry Rm (A18)</td><td>Breaker 18</td><td>basement_kw</td></tr>
+  <tr><td>Up Bedrooms (A16)</td><td>Breaker 16</td><td>office_bedroom_kw</td></tr>
+  <tr><td>Garage/Bath (B13)</td><td>Breaker 13</td><td>garage_bath_kw</td></tr>
+  <tr><td>Living Rm + (B14)</td><td>Breaker 14</td><td>living_room_kw</td></tr>
+  <tr><td>Fridge (A2)</td><td>Breaker 2</td><td>fridge_kw</td></tr>
+  <tr><td>Stove (B5/A6)</td><td>Breaker 5</td><td>stove_kw</td></tr>
+  <tr><td>A/C (B19/A20)</td><td>Breaker 19</td><td>ac_kw</td></tr>
+  <tr><td>Furnace (A17a)</td><td>Breaker 17a</td><td>furnace_fan_kw</td></tr>
+</table>
+
+<h3>Era Gap</h3>
+<div class="note">
+  <strong>30-month gap:</strong> May 20, 2022 → Nov 9, 2024 (903.9 days). The VUE was offline during this period.
+  Solar panels were installed and the device was recommissioned as the Solar Combiner Panel.
+</div>
+
+<div class="grid">
+  <div class="kpi"><div class="val">34,074</div><div class="label">Rows (old era)</div></div>
+  <div class="kpi"><div class="val">355</div><div class="label">Days of data</div></div>
+  <div class="kpi"><div class="val">100%</div><div class="label">All 10 CTs populated</div></div>
+  <div class="kpi"><div class="val">0%</div><div class="label">Solar cols (didn't exist)</div></div>
+</div>
+</div>
+
+<div class="section">
+<h2><span class="tag tag-solar">SOLAR</span> Solar Combiner Panel (B880A4, device 33555)</h2>
+<p style="color:var(--muted);font-size:0.9em">8 export ZIPs &bull; 17 columns per CSV &bull; Standalone data only (Nov 2024 → May 2025)</p>
+
+<h3>Deduplicated Coverage by Time Scale</h3>
+<table>
+  <tr><th>Scale</th><th>Date Range</th><th>Span</th><th>Unique Rows</th><th>Expected</th><th>Coverage</th><th>Gaps</th><th>Status</th></tr>
+  <tr>
+    <td>1DAY</td><td>2024-11-09 → 2025-05-05</td><td>177 d</td>
+    <td>178</td><td>178</td><td class="good">100.0%</td><td>0</td>
+    <td class="good">Complete</td>
+  </tr>
+  <tr>
+    <td>1H</td><td>2024-11-09 → 2025-05-05</td><td>177 d</td>
+    <td>4,246</td><td>4,247</td><td class="good">100.0%</td><td>0</td>
+    <td class="good">Complete</td>
+  </tr>
+  <tr>
+    <td>15MIN</td><td>2024-11-09 → 2025-05-05</td><td>177 d</td>
+    <td>16,985</td><td>16,989</td><td class="good">100.0%</td><td>1</td>
+    <td class="good">~Complete (DST only)</td>
+  </tr>
+  <tr>
+    <td>1MIN</td><td>2024-11-11 → 2025-05-05</td><td>175 d</td>
+    <td>54,178</td><td>251,965</td><td class="bad">21.5%</td><td>5</td>
+    <td class="bad">Very Sparse</td>
+  </tr>
+  <tr>
+    <td>1SEC</td><td>2024-11-18 → 2025-05-05</td><td>168 d</td>
+    <td>86,396</td><td>14,523,116</td><td class="bad">0.6%</td><td>7</td>
+    <td class="bad">Snapshots Only</td>
+  </tr>
+</table>
+
+<h3>15MIN Gap Detail</h3>
+<table class="gap-table">
+  <tr><th>From</th><th>To</th><th>Duration</th><th>Cause</th></tr>
+  <tr><td>2025-03-09 01:45</td><td>2025-03-09 03:00</td><td>1.2h</td><td>DST spring-forward</td></tr>
+</table>
+
+<h3>1MIN Gap Detail</h3>
+<table class="gap-table">
+  <tr><th>From</th><th>To</th><th>Duration</th><th>Notes</th></tr>
+  <tr><td>2024-11-18 13:13</td><td>2024-11-29 11:01</td><td>10.9 days</td><td>Export boundary gap</td></tr>
+  <tr><td>2024-12-06 11:20</td><td>2024-12-07 00:00</td><td>12.7 hours</td><td>Export boundary gap</td></tr>
+  <tr><td>2024-12-09 12:46</td><td>2024-12-31 23:01</td><td>22.4 days</td><td>Large gap; no export covers this</td></tr>
+  <tr><td>2025-01-07 23:49</td><td>2025-04-16 20:01</td><td>98.8 days</td><td>Large gap; ~3.3 months missing</td></tr>
+  <tr><td>2025-04-23 20:24</td><td>2025-04-28 12:01</td><td>4.7 days</td><td>Export boundary gap</td></tr>
+</table>
+</div>
+
+<div class="section">
+<h2><span class="tag tag-breaker">MAINS</span> Breaker Box (130C98, device 385843)</h2>
+<p style="color:var(--muted);font-size:0.9em">3 export ZIPs &bull; 19→36 columns (combined after Mar 2025)</p>
+
+<h3>Deduplicated Coverage by Time Scale</h3>
+<table>
+  <tr><th>Scale</th><th>Date Range</th><th>Span</th><th>Unique Rows</th><th>Expected</th><th>Coverage</th><th>Gaps</th><th>Status</th></tr>
+  <tr>
+    <td>1DAY</td><td>2024-11-10 → 2026-03-24</td><td>499 d</td>
+    <td>500</td><td>500</td><td class="good">100.0%</td><td>0</td>
+    <td class="good">Complete</td>
+  </tr>
+  <tr>
+    <td>1H</td><td>2024-11-10 → 2026-03-24</td><td>499 d</td>
+    <td>11,969</td><td>11,971</td><td class="good">100.0%</td><td>0</td>
+    <td class="good">Complete</td>
+  </tr>
+  <tr>
+    <td>15MIN</td><td>2024-11-10 → 2026-03-24</td><td>499 d</td>
+    <td>47,876</td><td>47,884</td><td class="good">100.0%</td><td>2</td>
+    <td class="good">~Complete (DST only)</td>
+  </tr>
+  <tr>
+    <td>1MIN</td><td>2025-04-16 → 2026-03-24</td><td>342 d</td>
+    <td>30,325</td><td>491,853</td><td class="bad">6.2%</td><td>2</td>
+    <td class="bad">Very Sparse</td>
+  </tr>
+  <tr>
+    <td>1SEC</td><td>2025-04-23 → 2026-03-24</td><td>335 d</td>
+    <td>32,402</td><td>28,915,660</td><td class="bad">0.1%</td><td>2</td>
+    <td class="bad">Snapshots Only</td>
+  </tr>
+</table>
+
+<h3>15MIN Gap Detail</h3>
+<table class="gap-table">
+  <tr><th>From</th><th>To</th><th>Duration</th><th>Cause</th></tr>
+  <tr><td>2025-03-09 01:45</td><td>2025-03-09 03:00</td><td>1.2h</td><td>DST spring-forward</td></tr>
+  <tr><td>2026-03-08 01:45</td><td>2026-03-08 03:00</td><td>1.2h</td><td>DST spring-forward</td></tr>
+</table>
+
+<h3>1MIN Gap Detail</h3>
+<table class="gap-table">
+  <tr><th>From</th><th>To</th><th>Duration</th><th>Notes</th></tr>
+  <tr><td>2025-04-23 20:25</td><td>2025-04-28 12:01</td><td>4.7 days</td><td>Export boundary gap</td></tr>
+  <tr><td>2025-05-05 12:27</td><td>2026-03-17 09:01</td><td>315.9 days</td><td class="bad">Massive gap; ~10.5 months missing</td></tr>
+</table>
+</div>
+
+<!-- VISUAL TIMELINE -->
+<div class="section">
+<h2>Visual Timeline (15MIN — best practical resolution)</h2>
+<div class="legend">
+  <div class="legend-item"><div class="legend-swatch" style="background:rgba(156,39,176,0.5)"></div>100A Panel (old era)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:rgba(0,210,255,0.6)"></div>Solar Combiner Panel</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:rgba(0,230,118,0.6)"></div>Breaker Box (19 cols)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:rgba(255,151,0,0.6)"></div>Breaker Box Combined (36 cols)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(255,82,82,0.3) 3px, rgba(255,82,82,0.3) 6px)"></div>Gap / Missing</div>
+</div>
+<div id="timeline"></div>
+</div>
+
+<!-- COLUMN STRUCTURE -->
+<div class="section">
+<h2>Column Structure Comparison</h2>
+
+<div class="note">
+  <strong>Monitor Merge Transition:</strong> Before March 25, 2025, the Breaker Box exported 19 columns (its own circuits only).
+  After that date, it exports 36 columns — the original 19 Breaker Box columns plus 17 Solar Combiner Panel columns.
+  When merging, the older Breaker Box data must be joined with separate Solar Combiner Panel exports for the same period.
+</div>
+
+<h3><span class="tag tag-solar">SOLAR</span> Solar Combiner Panel — 17 columns (all exports)</h3>
+<div class="col-list">
+  <div class="solar-col">Mains_A (kWatts/kWhs)</div>
+  <div class="solar-col">Mains_B (kWatts/kWhs)</div>
+  <div>Mains_C — always "No CT"</div>
+  <div>Other-Circuit_5 through Circuit_16 — all "No CT"</div>
+  <div class="solar-col">Solar/Generation-Top String (kWatts/kWhs)</div>
+  <div class="solar-col">Solar/Generation-Bottom String (kWatts/kWhs)</div>
+</div>
+<p style="font-size:0.85em;color:var(--muted);margin-top:8px">
+  <strong>Active columns:</strong> Mains_A, Mains_B (net solar power through mains), Top String, Bottom String (solar generation per string).
+  Units: kWatts for 1SEC/1MIN/15MIN; kWhs for 1H/1DAY.
+</p>
+
+<h3><span class="tag tag-breaker">MAINS</span> Breaker Box — 19 columns (pre-March 2025)</h3>
+<div class="col-list">
+  <div class="breaker-col">Mains_A / Mains_B (kWatts/kWhs)</div>
+  <div>Mains_C — "No CT"</div>
+  <div class="breaker-col">Basement (18)</div>
+  <div class="breaker-col">Office/Kids Bedroom (16)</div>
+  <div class="breaker-col">Garage/Main Bath (13)</div>
+  <div class="breaker-col">Living Room & Main Lights (14)</div>
+  <div class="breaker-col">Fridge (2)</div>
+  <div class="breaker-col">Stove (5)</div>
+  <div class="breaker-col">AC (19)</div>
+  <div class="breaker-col">Furnace Fan (17a)</div>
+  <div>Circuit_9 through Circuit_16 — "No CT"</div>
+</div>
+
+<h3><span class="tag tag-combined">COMBINED</span> Breaker Box — 36 columns (post-March 2025)</h3>
+<p style="font-size:0.85em;color:var(--muted)">First 19 columns = Breaker Box (same as above), then 17 columns = Solar Combiner Panel (same as standalone export).</p>
+</div>
+
+<!-- NULL PATTERN ANALYSIS -->
+<div class="section">
+<h2>Null Pattern Analysis (from vue_energy.db)</h2>
+<p style="color:var(--muted);font-size:0.9em;margin-bottom:12px">
+  Analysis of NULL values in the unified 15-minute SQLite database (47,982 rows). NULLs indicate periods where a sensor/CT wasn't reporting data.
+</p>
+
+<div class="grid">
+  <div class="kpi"><div class="val">82,056</div><div class="label">Total rows in DB</div></div>
+  <div class="kpi"><div class="val">2 eras</div><div class="label">Old panel + Solar</div></div>
+  <div class="kpi"><div class="val">0</div><div class="label">Solar col NULLs (solar era)</div></div>
+  <div class="kpi"><div class="val">903.9 d</div><div class="label">Inter-era gap</div></div>
+</div>
+
+<h3>CT Commissioning Sequence (Solar Era, Nov 2024)</h3>
+<div class="note">
+  <strong>Solar era NULLs: Staged VUE installation, not sensor removal or power loss.</strong>
+  All NULLs in the solar era are concentrated in the first 28.5 hours of monitoring (Nov 9–10, 2024).
+  The Solar Combiner Panel VUE came online first on Saturday afternoon. The Breaker Box VUE was connected ~25 hours later on Sunday,
+  with individual CTs clipped on over a 3-hour window. Zero null events after Nov 10 — no evidence of power loss or sensor disconnection.
+</div>
+
+<div class="note">
+  <strong>Old era (100A Panel):</strong> All 10 breaker CTs report 100% non-null for all 34,074 rows.
+  Solar columns are 100% NULL (solar didn't exist yet). This is expected and correct.
+</div>
+
+<div id="null-timeline" style="margin:16px 0"></div>
+
+<h3>Per-Column NULL Detail</h3>
+<table>
+  <tr><th>Column</th><th>NULLs</th><th>First NULL</th><th>First Value</th><th>Online At</th><th>Phase</th></tr>
+  <tr>
+    <td><span class="tag tag-solar">SOLAR</span> solar_mains_a_kw</td>
+    <td class="good">0</td><td colspan="3" style="color:var(--muted)">Always present — first sensor installed</td>
+    <td>Nov 9 1:15 PM</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-solar">SOLAR</span> solar_mains_b_kw</td>
+    <td class="good">0</td><td colspan="3" style="color:var(--muted)">Always present</td>
+    <td>Nov 9 1:15 PM</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-solar">SOLAR</span> solar_top_kw</td>
+    <td class="good">0</td><td colspan="3" style="color:var(--muted)">Always present</td>
+    <td>Nov 9 1:15 PM</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-solar">SOLAR</span> solar_bottom_kw</td>
+    <td class="good">0</td><td colspan="3" style="color:var(--muted)">Always present</td>
+    <td>Nov 9 1:15 PM</td>
+  </tr>
+  <tr style="border-top:2px solid #333">
+    <td><span class="tag tag-breaker">GRID</span> grid_mains_a_kw</td>
+    <td class="warn">102</td>
+    <td style="font-size:0.85em">Nov 9 1:15 PM</td>
+    <td style="font-size:0.85em">Nov 10 2:45 PM</td>
+    <td>Nov 10 2:45 PM</td>
+    <td><span style="color:var(--accent)">Phase 1</span></td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-breaker">GRID</span> grid_mains_b_kw</td>
+    <td class="warn">102</td>
+    <td style="font-size:0.85em">Nov 9 1:15 PM</td>
+    <td style="font-size:0.85em">Nov 10 2:45 PM</td>
+    <td>Nov 10 2:45 PM</td>
+    <td><span style="color:var(--accent)">Phase 1</span></td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-breaker">GRID</span> basement_kw</td>
+    <td class="warn">102</td>
+    <td style="font-size:0.85em">Nov 9 1:15 PM</td>
+    <td style="font-size:0.85em">Nov 10 2:45 PM</td>
+    <td>Nov 10 2:45 PM</td>
+    <td><span style="color:var(--accent)">Phase 1</span></td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-breaker">GRID</span> office_bedroom_kw</td>
+    <td class="warn">112</td>
+    <td style="font-size:0.85em">Nov 9 1:15 PM</td>
+    <td style="font-size:0.85em">Nov 10 5:15 PM</td>
+    <td>Nov 10 5:15 PM</td>
+    <td><span style="color:var(--green)">Phase 2</span></td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-breaker">GRID</span> garage_bath_kw</td>
+    <td class="warn">112</td>
+    <td style="font-size:0.85em">Nov 9 1:15 PM</td>
+    <td style="font-size:0.85em">Nov 10 5:15 PM</td>
+    <td>Nov 10 5:15 PM</td>
+    <td><span style="color:var(--green)">Phase 2</span></td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-breaker">GRID</span> living_room_kw</td>
+    <td class="warn">112</td>
+    <td style="font-size:0.85em">Nov 9 1:15 PM</td>
+    <td style="font-size:0.85em">Nov 10 5:15 PM</td>
+    <td>Nov 10 5:15 PM</td>
+    <td><span style="color:var(--green)">Phase 2</span></td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-breaker">GRID</span> fridge_kw</td>
+    <td class="warn">113</td>
+    <td style="font-size:0.85em">Nov 9 1:15 PM</td>
+    <td style="font-size:0.85em">Nov 10 5:30 PM</td>
+    <td>Nov 10 5:30 PM</td>
+    <td><span style="color:var(--yellow)">Phase 3</span></td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-breaker">GRID</span> stove_kw</td>
+    <td class="warn">114</td>
+    <td style="font-size:0.85em">Nov 9 1:15 PM</td>
+    <td style="font-size:0.85em">Nov 10 5:45 PM</td>
+    <td>Nov 10 5:45 PM</td>
+    <td><span style="color:var(--orange)">Phase 4</span></td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-breaker">GRID</span> ac_kw</td>
+    <td class="warn">114</td>
+    <td style="font-size:0.85em">Nov 9 1:15 PM</td>
+    <td style="font-size:0.85em">Nov 10 5:45 PM</td>
+    <td>Nov 10 5:45 PM</td>
+    <td><span style="color:var(--orange)">Phase 4</span></td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-breaker">GRID</span> furnace_fan_kw</td>
+    <td class="warn">114</td>
+    <td style="font-size:0.85em">Nov 9 1:15 PM</td>
+    <td style="font-size:0.85em">Nov 10 5:45 PM</td>
+    <td>Nov 10 5:45 PM</td>
+    <td><span style="color:var(--orange)">Phase 4</span></td>
+  </tr>
+</table>
+
+<h3>Computed Column NULLs</h3>
+<table>
+  <tr><th>Column</th><th>NULLs</th><th>Reason</th></tr>
+  <tr>
+    <td>grid_net_kw</td>
+    <td class="warn">102</td>
+    <td>Same as grid_mains — no breaker data in the initial 25h solar-only window</td>
+  </tr>
+  <tr>
+    <td>consumption_kw</td>
+    <td class="partial">47,073</td>
+    <td>Requires both grid + solar data from same row. NULL for: all 34,074 old-era rows (no solar), plus 12,999 solar-era rows
+        where grid and solar came from separate monitors (pre-combined-export). Non-null after Mar 25, 2025.</td>
+  </tr>
+</table>
+
+<h3>Installation Commissioning Timeline</h3>
+<div style="position:relative;margin:20px 0 10px;padding-left:140px">
+  <!-- Timeline axis -->
+  <div id="commission-timeline" style="position:relative;height:220px;border-left:2px solid #444;margin-left:0"></div>
+</div>
+</div>
+
+<!-- EXPORT FILE INVENTORY -->
+<div class="section">
+<h2>Export File Inventory</h2>
+<div id="inventory"></div>
+</div>
+
+<!-- KEY FINDINGS -->
+<div class="section">
+<h2>Key Findings & Recommendations</h2>
+<table>
+  <tr><th style="width:180px">Finding</th><th>Detail</th></tr>
+  <tr>
+    <td style="color:#ce93d8">100A Panel legacy data</td>
+    <td>Device 33555 was previously the 100A Panel (May 2021 → May 2022). <strong>34,074 rows, 355 days, zero gaps.</strong>
+        Same physical breaker positions as the current Breaker Box monitor. Provides ~1 year of pre-solar baseline consumption data.
+        No 15MIN export available before June 2021 (1H only for Feb-May 2021).</td>
+  </tr>
+  <tr>
+    <td class="bad">30-month offline gap</td>
+    <td>May 2022 → Nov 2024 (903.9 days). VUE was offline between the old 100A Panel era and the solar installation era. No data recovery possible.</td>
+  </tr>
+  <tr>
+    <td class="good">1DAY / 1H / 15MIN</td>
+    <td>Essentially 100% coverage when exports are merged. Only gaps are DST spring-forward transitions (1.2h each year). These are the useful resolutions for historical analysis.</td>
+  </tr>
+  <tr>
+    <td class="bad">1MIN data</td>
+    <td>VUE exports are capped at ~10K rows (~7 days). Solar panel has 21.5% coverage; Breaker Box has 6.2%. Large multi-month gaps. Not usable for continuous historical analysis without API access.</td>
+  </tr>
+  <tr>
+    <td class="bad">1SEC data</td>
+    <td>Each export covers only ~3 hours (~10.8K rows). Essentially point-in-time snapshots with &lt;1% coverage. Only usable for spot-check analysis of specific moments.</td>
+  </tr>
+  <tr>
+    <td class="warn">Column transition</td>
+    <td>Breaker Box exports changed from 19→36 columns around March 25, 2025. Post-transition exports contain Solar Combiner Panel data. Merging must handle both schemas and avoid double-counting solar data.</td>
+  </tr>
+  <tr>
+    <td class="warn">Solar panel coverage gap</td>
+    <td>Solar Combiner Panel standalone exports only cover Nov 2024 → May 2025. After May 2025, solar data only available via the combined Breaker Box export (36-col format).</td>
+  </tr>
+  <tr>
+    <td class="warn">Significant overlaps</td>
+    <td>Exports overlap extensively — many zip files cover the same date ranges. Deduplication by timestamp is essential when merging.</td>
+  </tr>
+  <tr>
+    <td class="good">Total DB coverage</td>
+    <td><strong>82,056 rows</strong> across two eras: 34,074 (old panel, May 2021 → May 2022) + 47,982 (solar era, Nov 2024 → Mar 2026). <strong>15MIN</strong> offers the best balance of granularity and completeness.</td>
+  </tr>
+</table>
+</div>
+
+<script>
+// ============================================================
+// DATA (from analysis)
+// ============================================================
+const exports_data = {
+  "33555_old": {
+    name: "100A Panel (old era)",
+    cls: "old-panel",
+    exports: [
+      {zip: "1820777388783280241", cols: 11, scales: {
+        "1DAY":{s:"2021-02-25",e:"2021-04-19",rows:54},
+        "1H":{s:"2021-02-25",e:"2021-04-19",rows:1265}
+      }},
+      {zip: "6952729694162196599", cols: 11, scales: {
+        "1DAY":{s:"2021-02-26",e:"2022-01-01",rows:310},
+        "1H":{s:"2021-02-26",e:"2022-01-01",rows:7417},
+        "15MIN":{s:"2021-05-30",e:"2022-01-01",rows:20664}
+      }},
+      {zip: "3765155988321628307", cols: 11, scales: {
+        "1DAY":{s:"2021-12-16",e:"2022-01-22",rows:38},
+        "1H":{s:"2021-12-16",e:"2022-01-22",rows:889},
+        "15MIN":{s:"2021-12-16",e:"2022-01-22",rows:3553}
+      }},
+      {zip: "5569502835271236251", cols: 11, scales: {
+        "15MIN":{s:"2022-01-30",e:"2022-02-01",rows:248},
+        "1DAY":{s:"2022-01-30",e:"2022-02-01",rows:3},
+        "1H":{s:"2022-01-30",e:"2022-02-01",rows:62},
+        "1MIN":{s:"2022-01-30",e:"2022-02-01",rows:3715},
+        "1SEC":{s:"2022-02-01",e:"2022-02-01",rows:10832}
+      }},
+      {zip: "674534895117049369", cols: 11, scales: {
+        "15MIN":{s:"2022-02-01",e:"2022-02-04",rows:289},
+        "1DAY":{s:"2022-02-01",e:"2022-02-04",rows:4},
+        "1H":{s:"2022-02-01",e:"2022-02-04",rows:73},
+        "1MIN":{s:"2022-02-01",e:"2022-02-04",rows:4321}
+      }},
+      {zip: "2411288595652131897", cols: 11, scales: {
+        "15MIN":{s:"2022-02-05",e:"2022-02-07",rows:243},
+        "1DAY":{s:"2022-02-05",e:"2022-02-07",rows:3},
+        "1H":{s:"2022-02-05",e:"2022-02-07",rows:61},
+        "1MIN":{s:"2022-02-05",e:"2022-02-07",rows:3643},
+        "1SEC":{s:"2022-02-07",e:"2022-02-07",rows:11012}
+      }},
+      {zip: "4671506414632096007", cols: 11, scales: {
+        "15MIN":{s:"2022-02-06",e:"2022-02-08",rows:245},
+        "1DAY":{s:"2022-02-06",e:"2022-02-08",rows:3},
+        "1H":{s:"2022-02-06",e:"2022-02-08",rows:62},
+        "1MIN":{s:"2022-02-06",e:"2022-02-08",rows:3675},
+        "1SEC":{s:"2022-02-08",e:"2022-02-08",rows:10830}
+      }},
+      {zip: "4070261376955599225", cols: 11, scales: {
+        "1DAY":{s:"2021-05-21",e:"2022-05-20",rows:365},
+        "1H":{s:"2021-05-21",e:"2022-05-20",rows:8754},
+        "15MIN":{s:"2021-05-30",e:"2022-05-20",rows:34074},
+        "1MIN":{s:"2022-05-13",e:"2022-05-20",rows:10115},
+        "1SEC":{s:"2022-05-20",e:"2022-05-20",rows:10875}
+      }}
+    ]
+  },
+  "33555": {
+    name: "Solar Combiner Panel",
+    cls: "solar",
+    exports: [
+      {zip: "354612632712751180", scales: {
+        "1DAY":{s:"2024-11-09",e:"2024-11-18",rows:10},
+        "1H":{s:"2024-11-09",e:"2024-11-18",rows:216},
+        "15MIN":{s:"2024-11-09",e:"2024-11-18",rows:864},
+        "1MIN":{s:"2024-11-11",e:"2024-11-18",rows:10093},
+        "1SEC":{s:"2024-11-18",e:"2024-11-18",rows:10799}
+      }},
+      {zip: "5999243399479072185", scales: {
+        "1DAY":{s:"2024-11-09",e:"2024-12-06",rows:28},
+        "1H":{s:"2024-11-09",e:"2024-12-06",rows:646},
+        "15MIN":{s:"2024-11-09",e:"2024-12-06",rows:2585},
+        "1MIN":{s:"2024-11-29",e:"2024-12-06",rows:10100},
+        "1SEC":{s:"2024-12-06",e:"2024-12-06",rows:10801}
+      }},
+      {zip: "5181163429209353523", scales: {
+        "1DAY":{s:"2024-12-07",e:"2024-12-09",rows:3},
+        "1H":{s:"2024-12-07",e:"2024-12-09",rows:58},
+        "15MIN":{s:"2024-12-07",e:"2024-12-09",rows:229},
+        "1MIN":{s:"2024-12-07",e:"2024-12-09",rows:3428},
+        "1SEC":{s:"2024-12-09",e:"2024-12-09",rows:10801}
+      }},
+      {zip: "3005459267272721288", scales: {
+        "1DAY":{s:"2024-12-08",e:"2024-12-09",rows:2},
+        "1H":{s:"2024-12-08",e:"2024-12-09",rows:25},
+        "15MIN":{s:"2024-12-08",e:"2024-12-09",rows:97},
+        "1MIN":{s:"2024-12-08",e:"2024-12-09",rows:1441},
+        "1SEC":{s:"2024-12-08",e:"2024-12-09",rows:10801}
+      }},
+      {zip: "1881410716971019782", scales: {
+        "1DAY":{s:"2024-12-09",e:"2024-12-09",rows:1},
+        "1H":{s:"2024-12-09",e:"2024-12-09",rows:13},
+        "15MIN":{s:"2024-12-09",e:"2024-12-09",rows:52},
+        "1MIN":{s:"2024-12-09",e:"2024-12-09",rows:767},
+        "1SEC":{s:"2024-12-09",e:"2024-12-09",rows:10801}
+      }},
+      {zip: "4950261093851770134", scales: {
+        "1DAY":{s:"2024-12-01",e:"2025-01-07",rows:38},
+        "1H":{s:"2024-12-01",e:"2025-01-07",rows:912},
+        "15MIN":{s:"2024-12-01",e:"2025-01-07",rows:3648},
+        "1MIN":{s:"2024-12-31",e:"2025-01-07",rows:10129},
+        "1SEC":{s:"2025-01-07",e:"2025-01-07",rows:10801}
+      }},
+      {zip: "3026965895290852274", scales: {
+        "1DAY":{s:"2024-11-09",e:"2025-04-23",rows:166},
+        "1H":{s:"2024-11-09",e:"2025-04-23",rows:3966},
+        "15MIN":{s:"2024-11-09",e:"2025-04-23",rows:15865},
+        "1MIN":{s:"2025-04-16",e:"2025-04-23",rows:10104},
+        "1SEC":{s:"2025-04-23",e:"2025-04-23",rows:10791}
+      }},
+      {zip: "7107861423385307356", scales: {
+        "1DAY":{s:"2025-01-01",e:"2025-05-05",rows:125},
+        "1H":{s:"2025-01-01",e:"2025-05-05",rows:2988},
+        "15MIN":{s:"2025-01-01",e:"2025-05-05",rows:11950},
+        "1MIN":{s:"2025-04-28",e:"2025-05-05",rows:10105},
+        "1SEC":{s:"2025-05-05",e:"2025-05-05",rows:10801}
+      }}
+    ]
+  },
+  "385843": {
+    name: "Breaker Box",
+    exports: [
+      {zip: "1691680628775189862", cols: 19, scales: {
+        "1DAY":{s:"2024-11-10",e:"2025-04-23",rows:165},
+        "1H":{s:"2024-11-10",e:"2025-04-23",rows:3941},
+        "15MIN":{s:"2024-11-10",e:"2025-04-23",rows:15763},
+        "1MIN":{s:"2025-04-16",e:"2025-04-23",rows:10105},
+        "1SEC":{s:"2025-04-23",e:"2025-04-23",rows:10801}
+      }},
+      {zip: "6275897122459760902", cols: 19, scales: {
+        "1DAY":{s:"2025-01-01",e:"2025-05-05",rows:125},
+        "1H":{s:"2025-01-01",e:"2025-05-05",rows:2988},
+        "15MIN":{s:"2025-01-01",e:"2025-05-05",rows:11950},
+        "1MIN":{s:"2025-04-28",e:"2025-05-05",rows:10107},
+        "1SEC":{s:"2025-05-05",e:"2025-05-05",rows:10801}
+      }},
+      {zip: "9075035409746941002", cols: 36, scales: {
+        "1DAY":{s:"2025-03-25",e:"2026-03-24",rows:365},
+        "1H":{s:"2025-03-25",e:"2026-03-24",rows:8746},
+        "15MIN":{s:"2025-03-25",e:"2026-03-24",rows:34983},
+        "1MIN":{s:"2026-03-17",e:"2026-03-24",rows:10113},
+        "1SEC":{s:"2026-03-24",e:"2026-03-24",rows:10800}
+      }}
+    ]
+  }
+};
+
+// ============================================================
+// TIMELINE VISUALIZATION
+// ============================================================
+const globalStart = new Date("2021-02-01");
+const globalEnd = new Date("2026-03-25");
+const totalMs = globalEnd - globalStart;
+
+function dateToX(d) {
+  return ((new Date(d) - globalStart) / totalMs) * 100;
+}
+
+function buildTimeline() {
+  const container = document.getElementById("timeline");
+  const scales = ["1DAY", "1H", "15MIN", "1MIN", "1SEC"];
+
+  // Month markers (every 3 months for wider span)
+  let tickHtml = '<div style="position:relative;height:24px;margin-bottom:4px;">';
+  for (let y = 2021; y <= 2026; y++) {
+    for (let m of [0, 3, 6, 9]) {
+      const d = new Date(y, m, 1);
+      if (d < globalStart || d > globalEnd) continue;
+      const x = dateToX(d.toISOString().slice(0,10));
+      if (x >= 0 && x <= 100) {
+        const label = d.toLocaleDateString("en-US", {month:"short", year:"2-digit"});
+        tickHtml += `<span style="position:absolute;left:${x}%;transform:translateX(-50%);font-size:0.65em;color:var(--muted)">${label}</span>`;
+      }
+    }
+  }
+  tickHtml += '</div>';
+  container.innerHTML = tickHtml;
+
+  // Key transition lines
+  const gapStartX = dateToX("2022-05-20");
+  const gapEndX = dateToX("2024-11-09");
+  const transX = dateToX("2025-03-25");
+
+  for (const scale of scales) {
+    let html = `<div class="timeline-row"><div class="timeline-label">${scale}</div>`;
+    html += `<div class="timeline-track">`;
+
+    // Gap region (hatched)
+    const gapW = gapEndX - gapStartX;
+    html += `<div class="timeline-gap" style="left:${gapStartX}%;width:${gapW}%" title="VUE offline: May 2022 → Nov 2024 (~30 months)"></div>`;
+
+    // Transition marker
+    html += `<div style="position:absolute;left:${transX}%;width:1px;height:100%;background:var(--orange);opacity:0.5;z-index:5" title="Combined monitor transition"></div>`;
+
+    // Old 100A Panel blocks (purple)
+    for (const exp of exports_data["33555_old"].exports) {
+      const sc = exp.scales[scale];
+      if (!sc) continue;
+      const x1 = dateToX(sc.s);
+      const x2 = dateToX(sc.e);
+      const w = Math.max(x2 - x1, 0.15);
+      html += `<div class="timeline-block" style="left:${x1}%;width:${w}%;background:rgba(156,39,176,0.5)" title="100A Panel: ${sc.s} → ${sc.e} (${sc.rows} rows)"></div>`;
+    }
+
+    // Solar blocks
+    for (const exp of exports_data["33555"].exports) {
+      const sc = exp.scales[scale];
+      if (!sc) continue;
+      const x1 = dateToX(sc.s);
+      const x2 = dateToX(sc.e);
+      const w = Math.max(x2 - x1, 0.15);
+      html += `<div class="timeline-block solar" style="left:${x1}%;width:${w}%" title="Solar: ${sc.s} → ${sc.e} (${sc.rows} rows)"></div>`;
+    }
+
+    // Breaker Box blocks
+    for (const exp of exports_data["385843"].exports) {
+      const sc = exp.scales[scale];
+      if (!sc) continue;
+      const x1 = dateToX(sc.s);
+      const x2 = dateToX(sc.e);
+      const w = Math.max(x2 - x1, 0.15);
+      const cls = exp.cols === 36 ? "combined" : "breaker";
+      html += `<div class="timeline-block ${cls}" style="left:${x1}%;width:${w}%;top:50%;height:50%" title="Breaker Box (${exp.cols}col): ${sc.s} → ${sc.e} (${sc.rows} rows)"></div>`;
+    }
+
+    html += `</div></div>`;
+    container.innerHTML += html;
+  }
+
+  // Labels
+  container.innerHTML += `<div style="display:flex;margin-top:4px;font-size:0.7em;color:var(--muted)">
+    <div style="width:60px"></div>
+    <div style="flex:1;display:flex;justify-content:space-between">
+      <span style="color:#ce93d8">← 100A Panel era</span>
+      <span style="color:var(--red)">↕ ~30 month gap</span>
+      <span style="color:var(--accent)">Solar era →</span>
+      <span style="color:var(--orange)">↑ Combined</span>
+      <span>Mar '26</span>
+    </div></div>`;
+}
+
+// ============================================================
+// EXPORT INVENTORY TABLE
+// ============================================================
+function buildInventory() {
+  const container = document.getElementById("inventory");
+
+  for (const [devId, dev] of Object.entries(exports_data)) {
+    const tagCls = devId === "33555" ? "tag-solar" : devId === "33555_old" ? "tag-solar" : "tag-breaker";
+    const tagStyle = devId === "33555_old" ? ' style="background:rgba(156,39,176,0.2);color:#ce93d8"' : "";
+    let html = `<h3><span class="tag ${tagCls}"${tagStyle}>${devId.replace("_old"," (old)")}</span> ${dev.name}</h3>`;
+    html += `<table><tr><th>Export ZIP</th><th>Cols</th>`;
+    for (const s of ["1DAY","1H","15MIN","1MIN","1SEC"]) html += `<th>${s}</th>`;
+    html += `</tr>`;
+
+    for (const exp of dev.exports) {
+      html += `<tr><td style="font-family:monospace;font-size:0.8em">...${exp.zip.slice(-12)}</td>`;
+      html += `<td>${exp.cols || 17}</td>`;
+      for (const s of ["1DAY","1H","15MIN","1MIN","1SEC"]) {
+        const sc = exp.scales[s];
+        if (sc) {
+          html += `<td style="font-size:0.8em">${sc.s.slice(5)} → ${sc.e.slice(5)}<br><span style="color:var(--muted)">${sc.rows.toLocaleString()} rows</span></td>`;
+        } else {
+          html += `<td>—</td>`;
+        }
+      }
+      html += `</tr>`;
+    }
+    html += `</table>`;
+    container.innerHTML += html;
+  }
+}
+
+// ============================================================
+// NULL PATTERN / COMMISSIONING TIMELINE
+// ============================================================
+function buildNullTimeline() {
+  // Visual timeline bar for the null window (Nov 9 1:15 PM → Nov 10 5:45 PM)
+  const container = document.getElementById("null-timeline");
+  const windowStart = new Date("2024-11-09T19:15:00Z"); // 1:15 PM CT
+  const windowEnd   = new Date("2024-11-10T23:45:00Z"); // 5:45 PM CT
+  const totalMs = windowEnd - windowStart;
+  const pct = (d) => ((new Date(d) - windowStart) / totalMs * 100).toFixed(2);
+
+  const phases = [
+    { label:"Solar VUE online",       time:"2024-11-09T19:15:00Z", color:"var(--accent)",  cols:"Solar Mains A/B, Top, Bottom" },
+    { label:"Breaker Box + Mains/Basement", time:"2024-11-10T20:45:00Z", color:"var(--accent)", cols:"Grid Mains A/B, Basement" },
+    { label:"Office, Garage, Living",  time:"2024-11-10T23:15:00Z", color:"var(--green)",  cols:"Office/Bedroom, Garage/Bath, Living Room" },
+    { label:"Fridge",                  time:"2024-11-10T23:30:00Z", color:"var(--yellow)", cols:"Fridge" },
+    { label:"Stove, AC, Furnace Fan",  time:"2024-11-10T23:45:00Z", color:"var(--orange)", cols:"Stove, AC, Furnace Fan" },
+  ];
+
+  // Hour labels
+  let html = '<div style="font-size:0.85em;color:var(--muted);margin-bottom:6px">NULL window: <strong style="color:var(--text)">Nov 9 1:15 PM</strong> → <strong style="color:var(--text)">Nov 10 5:45 PM CT</strong> (28.5 hours)</div>';
+
+  // Build a stacked bar for each column group
+  const groups = [
+    { name:"Solar (all 4 cols)", start:0, end:0, color:"var(--accent)", note:"Always online" },
+    { name:"Grid Mains + Basement", start:0, end:pct("2024-11-10T20:45:00Z"), color:"rgba(255,82,82,0.4)", note:"NULL 25.5h" },
+    { name:"Office/Garage/Living", start:0, end:pct("2024-11-10T23:15:00Z"), color:"rgba(255,82,82,0.4)", note:"NULL 28.0h" },
+    { name:"Fridge", start:0, end:pct("2024-11-10T23:30:00Z"), color:"rgba(255,82,82,0.4)", note:"NULL 28.2h" },
+    { name:"AC/Stove/Furnace", start:0, end:pct("2024-11-10T23:45:00Z"), color:"rgba(255,82,82,0.4)", note:"NULL 28.5h" },
+  ];
+
+  for (const g of groups) {
+    html += `<div style="display:flex;align-items:center;margin:3px 0">`;
+    html += `<div style="width:180px;font-size:0.82em;color:var(--muted);text-align:right;padding-right:10px;flex-shrink:0">${g.name}</div>`;
+    html += `<div style="flex:1;height:20px;background:#111;border-radius:3px;position:relative;overflow:hidden">`;
+    if (g.end > 0) {
+      html += `<div style="position:absolute;left:0;width:${g.end}%;height:100%;background:${g.color};border-radius:3px 0 0 3px" title="${g.note}"></div>`;
+      html += `<div style="position:absolute;left:${g.end}%;width:${100-g.end}%;height:100%;background:rgba(0,230,118,0.25);border-radius:0 3px 3px 0"></div>`;
+    } else {
+      html += `<div style="width:100%;height:100%;background:rgba(0,210,255,0.25);border-radius:3px"></div>`;
+    }
+    html += `</div>`;
+    html += `<div style="width:80px;font-size:0.78em;color:var(--muted);padding-left:8px;flex-shrink:0">${g.note}</div>`;
+    html += `</div>`;
+  }
+
+  // Legend
+  html += `<div style="display:flex;gap:16px;margin-top:8px;font-size:0.8em;color:var(--muted)">`;
+  html += `<span><span style="display:inline-block;width:12px;height:10px;background:rgba(255,82,82,0.4);border-radius:2px;margin-right:4px"></span>NULL (sensor offline)</span>`;
+  html += `<span><span style="display:inline-block;width:12px;height:10px;background:rgba(0,230,118,0.25);border-radius:2px;margin-right:4px"></span>Active (reporting data)</span>`;
+  html += `<span><span style="display:inline-block;width:12px;height:10px;background:rgba(0,210,255,0.25);border-radius:2px;margin-right:4px"></span>Solar (always active)</span>`;
+  html += `</div>`;
+
+  container.innerHTML = html;
+
+  // Commissioning vertical timeline
+  const ct = document.getElementById("commission-timeline");
+  const events = [
+    { time:"Nov 9, 1:15 PM",  label:"Solar Combiner Panel VUE powered on",           detail:"Solar Mains A/B + Top/Bottom String begin reporting", color:"var(--accent)", phase:"" },
+    { time:"Nov 10, 2:45 PM", label:"Breaker Box VUE powered on",                     detail:"Grid Mains A/B + Basement CT connected (3 channels)", color:"var(--accent)", phase:"Phase 1" },
+    { time:"Nov 10, 5:15 PM", label:"Second batch of CTs clipped on",                 detail:"Office/Bedroom, Garage/Bath, Living Room (3 CTs)", color:"var(--green)", phase:"Phase 2" },
+    { time:"Nov 10, 5:30 PM", label:"Fridge CT connected",                            detail:"Fridge circuit (1 CT)", color:"var(--yellow)", phase:"Phase 3" },
+    { time:"Nov 10, 5:45 PM", label:"Final CTs connected — install complete",         detail:"Stove, AC, Furnace Fan (3 CTs) — all 10 breaker channels active", color:"var(--orange)", phase:"Phase 4" },
+  ];
+
+  let thtml = '';
+  events.forEach((ev, i) => {
+    const top = (i / (events.length - 1)) * 190;
+    thtml += `<div style="position:absolute;top:${top}px;left:-8px;display:flex;align-items:flex-start">`;
+    thtml += `<div style="width:14px;height:14px;border-radius:50%;background:${ev.color};border:2px solid #222;flex-shrink:0;z-index:2"></div>`;
+    thtml += `<div style="margin-left:12px">`;
+    thtml += `<div style="font-size:0.82em;color:var(--muted)">${ev.time}${ev.phase ? ' <span style="color:'+ev.color+';font-weight:600">'+ev.phase+'</span>' : ''}</div>`;
+    thtml += `<div style="font-size:0.92em;font-weight:600;color:var(--text)">${ev.label}</div>`;
+    thtml += `<div style="font-size:0.82em;color:var(--muted)">${ev.detail}</div>`;
+    thtml += `</div></div>`;
+  });
+  ct.innerHTML = thtml;
+}
+
+// ============================================================
+// INIT
+// ============================================================
+buildTimeline();
+buildInventory();
+buildNullTimeline();
+</script>
+
+</body>
+</html>
