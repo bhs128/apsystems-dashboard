@@ -111,8 +111,8 @@
       </div>
       <div>
         <label>Avg Monthly Consumption (kWh)</label>
-        <input type="number" id="inAvgConsume" step="1" value="665">
-        <p class="help">Used for no-solar baseline</p>
+        <input type="number" id="inAvgConsume" step="1" value="856">
+        <p class="help">Scales pre-solar profile shape (856 = historical avg)</p>
       </div>
       <div>
         <label>Current Utility Rate ($/kWh)</label>
@@ -145,15 +145,13 @@
 </div>
 
 <!-- Secondary charts -->
-<div class="row2">
-  <div class="box">
+<div class="box">
     <h3>Monthly Cash Flow</h3>
-    <div class="chart-wrap" style="height:250px"><canvas id="cashflowChart"></canvas></div>
-  </div>
-  <div class="box">
+    <div class="chart-wrap" style="height:300px"><canvas id="cashflowChart"></canvas></div>
+</div>
+<div class="box">
     <h3>HELOC Balance</h3>
     <div class="chart-wrap" style="height:250px"><canvas id="helocChart"></canvas></div>
-  </div>
 </div>
 
 <!-- Year-by-year table -->
@@ -226,11 +224,8 @@ async function init() {
     billingData.sort(function(a, b) { return a.meter_date < b.meter_date ? -1 : 1; });
     financeData.sort(function(a, b) { return a.date < b.date ? -1 : 1; });
 
-    // Auto-fill avg consumption from actual data
-    if (billingData.length >= 6) {
-      var totalCons = billingData.reduce(function(s, r) { return s + r.energy_consumed_kwh; }, 0);
-      $('inAvgConsume').value = Math.round(totalCons / billingData.length);
-    }
+    // Default avg consumption to pre-solar historical average
+    $('inAvgConsume').value = Math.round(PRE_SOLAR_AVG);
 
     runModel();
   } catch(e) {
@@ -265,34 +260,69 @@ function decomposeActualBills(billing) {
 }
 
 // ============================================================
-//  Build monthly seasonal profile from actual billing
+//  Pre-solar historical consumption profile (2019-2023 avg)
 // ============================================================
-function buildSeasonalProfile(billing) {
-  // Build consumed/produced per calendar month.
-  // Use most recent data point for each month (avoids ramp-up / partial months).
-  // Exclude pre-solar months (no production).
-  var months = {}; // month(1-12) -> {date, consumed, produced}
+// 5-year average monthly consumption from actual pre-solar billing data.
+// Used as the baseline consumption "shape" — scaled to match user's
+// specified avg monthly consumption.
+var PRE_SOLAR_PROFILE = [
+  // month, avgKwh (2019-2023 mean)
+  { month:  1, kwh: 842.8 },  // Jan
+  { month:  2, kwh: 792.8 },  // Feb
+  { month:  3, kwh: 779.8 },  // Mar
+  { month:  4, kwh: 737.0 },  // Apr
+  { month:  5, kwh: 735.4 },  // May
+  { month:  6, kwh: 950.0 },  // Jun
+  { month:  7, kwh: 1049.6 }, // Jul
+  { month:  8, kwh: 1013.2 }, // Aug
+  { month:  9, kwh: 944.8 },  // Sep
+  { month: 10, kwh: 873.0 },  // Oct
+  { month: 11, kwh: 757.4 },  // Nov
+  { month: 12, kwh: 796.2 }   // Dec
+];
+var PRE_SOLAR_AVG = PRE_SOLAR_PROFILE.reduce(function(s, p) { return s + p.kwh; }, 0) / 12; // ~856
+
+function buildScaledConsumptionProfile(avgConsume) {
+  // Scale the historical shape so the average equals avgConsume
+  var scale = avgConsume / PRE_SOLAR_AVG;
+  return PRE_SOLAR_PROFILE.map(function(p) {
+    return { month: p.month, consumed: p.kwh * scale };
+  });
+}
+
+// ============================================================
+//  Build monthly solar production profile from actual billing
+// ============================================================
+function buildSolarProductionProfile(billing) {
+  // Average all data points per calendar month.
+  // Special case: first billing period (2024-11) was a half-cycle install month — double it.
+  var monthSums = {};  // month(1-12) -> {total, count}
+  var firstProdDate = null;
+  billing.forEach(function(r) {
+    if (r.energy_produced_kwh <= 0) return;
+    if (!firstProdDate || r.meter_date < firstProdDate) firstProdDate = r.meter_date;
+  });
+
   billing.forEach(function(r) {
     if (r.energy_produced_kwh <= 0) return;
     var m = parseInt(r.meter_date.slice(5, 7));
-    // Keep only the latest entry per calendar month
-    if (!months[m] || r.meter_date > months[m].date) {
-      months[m] = { date: r.meter_date, consumed: r.energy_consumed_kwh, produced: r.energy_produced_kwh };
-    }
+    var prod = r.energy_produced_kwh;
+    // Double the first billing period (mid-cycle install)
+    if (r.meter_date === firstProdDate) prod *= 2;
+    if (!monthSums[m]) monthSums[m] = { total: 0, count: 0 };
+    monthSums[m].total += prod;
+    monthSums[m].count += 1;
   });
 
-  // Compute fallback from all solar-era months
-  var solarRows = billing.filter(function(r) { return r.energy_produced_kwh > 0; });
-  var tc = solarRows.reduce(function(s,r){return s + r.energy_consumed_kwh;}, 0) / (solarRows.length || 1);
-  var tp = solarRows.reduce(function(s,r){return s + r.energy_produced_kwh;}, 0) / (solarRows.length || 1);
+  // Overall average as fallback for months with no data
+  var allTotal = 0, allCount = 0;
+  for (var k in monthSums) { allTotal += monthSums[k].total; allCount += monthSums[k].count; }
+  var fallback = allCount > 0 ? allTotal / allCount : 0;
 
   var profile = [];
   for (var m = 1; m <= 12; m++) {
-    if (months[m]) {
-      profile.push({ month: m, consumed: months[m].consumed, produced: months[m].produced });
-    } else {
-      profile.push({ month: m, consumed: tc, produced: tp });
-    }
+    var entry = monthSums[m];
+    profile.push({ month: m, produced: entry ? entry.total / entry.count : fallback });
   }
   return profile;
 }
@@ -314,7 +344,8 @@ function runModel() {
 
   // Decompose bills
   var decomp = decomposeActualBills(billingData);
-  var seasonal = buildSeasonalProfile(billingData);
+  var consumeProfile = buildScaledConsumptionProfile(avgConsume);
+  var solarProfile = buildSolarProductionProfile(billingData);
 
   // Determine system start date = first billing month with production
   var firstProdBill = billingData.find(function(r) { return r.energy_produced_kwh > 0; });
@@ -426,12 +457,14 @@ function runModel() {
       var deg = Math.pow(1 - degrade, yearIndex);
       var fmCharge = decomp.fixed * Math.pow(1 + fixedEsc, yearIndex);
       var vRate = decomp.varRate * Math.pow(1 + rateEsc, yearIndex);
-      var sp = seasonal[calMonth - 1] || { consumed: avgConsume, produced: avgConsume };
-      monthProduction = sp.produced * deg;
-      var netGrid = Math.max(0, sp.consumed - monthProduction);
+      var cp = consumeProfile[calMonth - 1];
+      var sprod = solarProfile[calMonth - 1];
+      var scaledConsumed = cp.consumed;
+      monthProduction = sprod.produced * deg;
+      var netGrid = Math.max(0, scaledConsumed - monthProduction);
       electricBill = fmCharge + vRate * netGrid;
 
-      estNoSolar = avgConsume * utilRate * Math.pow(1 + rateEsc, yearIndex);
+      estNoSolar = scaledConsumed * utilRate * Math.pow(1 + rateEsc, yearIndex);
 
       // Model HELOC
       interest = helocBalance * apr / 12;
@@ -511,7 +544,17 @@ function renderKPIs(breakevenMo, helocPayoffMo, totalInterest, totalSavings, pea
   }
 
   var totalCost = peakBalance + downPayment;
-  kpi('$' + fmt(totalCost, 0), 'System Cost', 'cyan');
+  // Detect rebate from largest single-month HELOC balance drop
+  var rebateAmount = 0;
+  for (var fi = 1; fi < financeData.length; fi++) {
+    var drop = financeData[fi - 1].heloc_balance - financeData[fi].heloc_balance;
+    if (drop > rebateAmount) rebateAmount = drop;
+  }
+  // Only count as rebate if it's significantly larger than normal payments
+  if (rebateAmount < 1000) rebateAmount = 0;
+  var netCost = totalCost - rebateAmount;
+  kpi('$' + fmt(totalCost, 0), 'System Cost', 'cyan', 'After rebate: $' + fmt(netCost, 0));
+  kpi('$' + fmt(totalInterest, 0), 'Total Interest', 'bad');
   kpi('$' + fmt(downPayment, 0), 'Down Payment', '');
   kpi('$' + fmt(peakBalance, 0), 'Peak HELOC', 'cyan');
 
@@ -527,8 +570,17 @@ function renderKPIs(breakevenMo, helocPayoffMo, totalInterest, totalSavings, pea
     kpi(yr2 + ' yr', 'HELOC Payoff', 'cyan', 'Month ' + helocPayoffMo);
   }
 
-  kpi('$' + fmt(totalInterest, 0), 'Total Interest', 'bad');
   kpi('$' + fmt(totalSavings, 0), horizonYears + '-Yr Net Savings', 'good');
+
+  // Equivalent investment return: what annual rate on the same net outlay yields the same profit?
+  // Net outlay = system cost + interest - rebate
+  var netOutlay = totalCost + totalInterest - rebateAmount;
+  if (netOutlay > 0 && totalSavings > 0) {
+    // netOutlay * (1+r)^years = netOutlay + totalSavings
+    var equivRate = Math.pow(1 + totalSavings / netOutlay, 1 / horizonYears) - 1;
+    kpi((equivRate * 100).toFixed(1) + '%', 'Equiv. Annual Return', 'good',
+        '$' + fmt(netOutlay, 0) + ' net outlay');
+  }
 
   // LCOE
   var utilRate = parseFloat($('inRate').value) || 0.232;
@@ -706,24 +758,19 @@ function renderMainChart(schedule, breakevenMo, helocPayoffMo) {
 function renderCashflowChart(schedule) {
   if (cashflowChartObj) cashflowChartObj.destroy();
 
-  // Downsample: show every 3rd month, or every month for first 24
-  var ds = schedule.filter(function(s, i) {
-    return i < 36 || i % 3 === 0 || i === schedule.length - 1;
-  });
-
   var axStyle = { ticks: { color: '#64748b', font: { size: 8 } }, grid: { color: '#1e293b' } };
 
   cashflowChartObj = new Chart($('cashflowChart'), {
     type: 'bar',
     data: {
-      labels: ds.map(function(s) { return s.label; }),
+      labels: schedule.map(function(s) { return s.label; }),
       datasets: [
-        { label: 'No-Solar Bill', data: ds.map(function(s) { return Math.round(s.noSolarMonthly); }),
-          backgroundColor: ds.map(function(s) { return s.isActual ? '#ef444488' : '#ef444444'; }),
-          borderWidth: 0 },
-        { label: 'With-Solar Cost', data: ds.map(function(s) { return Math.round(s.withSolarMonthly); }),
-          backgroundColor: ds.map(function(s) { return s.isActual ? '#22c55e88' : '#22c55e44'; }),
-          borderWidth: 0 }
+        { label: 'No-Solar Bill', data: schedule.map(function(s) { return Math.round(s.noSolarMonthly); }),
+          backgroundColor: schedule.map(function(s) { return s.isActual ? '#ef444488' : '#ef444444'; }),
+          borderWidth: 0, barPercentage: 1.0, categoryPercentage: 0.95 },
+        { label: 'With-Solar Cost', data: schedule.map(function(s) { return Math.round(s.withSolarMonthly); }),
+          backgroundColor: schedule.map(function(s) { return s.isActual ? '#22c55e88' : '#22c55e44'; }),
+          borderWidth: 0, barPercentage: 1.0, categoryPercentage: 0.95 }
       ]
     },
     options: {
@@ -731,7 +778,17 @@ function renderCashflowChart(schedule) {
       interaction: { mode: 'index', intersect: false },
       plugins: { legend: { display: true, labels: { color: '#94a3b8', boxWidth: 10, font: { size: 9 } } } },
       scales: {
-        x: Object.assign({}, axStyle, { ticks: { maxTicksLimit: 15, maxRotation: 45, font: { size: 7 } } }),
+        x: Object.assign({}, axStyle, {
+          ticks: {
+            maxRotation: 0, font: { size: 7 },
+            callback: function(val, idx) {
+              var lbl = this.getLabelForValue(val);
+              // Show only January labels as year markers
+              if (lbl && lbl.endsWith('-01')) return lbl.slice(0, 4);
+              return '';
+            }
+          }
+        }),
         y: Object.assign({}, axStyle, {
           ticks: { callback: function(v) { return '$' + v; } },
           title: { display: true, text: '$/month', color: '#64748b' }

@@ -14,9 +14,14 @@ venv/
 # Local data files (not part of the project)
 daily_prod_curves/
 panel_data/
+temp_vue_data/
 *.xls
 *.csv
+*.bak
 !requirements.txt
+
+# Zone.Identifier files (Windows metadata)
+*:Zone.Identifier
 
 # OS
 .DS_Store
