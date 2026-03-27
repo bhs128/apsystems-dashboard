@@ -115,12 +115,42 @@
         <p class="help">Scales pre-solar profile shape (856 = historical avg)</p>
       </div>
       <div>
-        <label>Current Utility Rate ($/kWh)</label>
-        <input type="number" id="inRate" step="0.001" value="0.232">
-      </div>
-      <div>
         <label>Forecast Horizon (years)</label>
         <input type="number" id="inYears" step="1" value="25" min="5" max="40">
+      </div>
+    </div>
+    <h3 class="collapsible" onclick="toggleSection(this, 'utilityRates')" style="margin-top:0.75rem">Utility Rates</h3>
+    <div id="utilityRates" style="display:none">
+      <p class="help" style="margin-bottom:0.5rem">
+        Per-unit rates from your utility bill. Daily charges escalate with Fixed Charge %/yr; per-kWh rates with Utility Rate %/yr.
+      </p>
+      <div class="field-grid">
+        <div>
+          <label>Consumption Meter ($/day)</label>
+          <input type="number" id="inDailyCons" step="0.00001" value="0.49315">
+        </div>
+        <div>
+          <label>Production Meter ($/day)</label>
+          <input type="number" id="inDailyProd" step="0.00001" value="0.05951">
+        </div>
+        <div>
+          <label>Energy Charge ($/kWh)</label>
+          <input type="number" id="inEnergyCharge" step="0.00001" value="0.19342">
+        </div>
+        <div>
+          <label>Extra Charges ($/kWh)</label>
+          <input type="number" id="inExtraCharge" step="0.00001" value="0.01213">
+          <p class="help">E.g. Energy for Tomorrow + Env. Control</p>
+        </div>
+        <div>
+          <label>Buyback Rate ($/kWh)</label>
+          <input type="number" id="inBuyback" step="0.00001" value="0.03636">
+          <p class="help">Credit for excess solar sent to grid</p>
+        </div>
+        <div>
+          <label>Bill Surcharge (%)</label>
+          <input type="number" id="inSurcharge" step="0.1" value="3">
+        </div>
       </div>
     </div>
     <div style="margin-top:0.5rem">
@@ -234,29 +264,44 @@ async function init() {
 }
 
 // ============================================================
-//  Bill decomposition regression (from actual billing data)
+//  Read rate schedule from inputs (current-year baseline)
 // ============================================================
-function decomposeActualBills(billing) {
-  // bill = fixed + rate * max(0, consumed - produced)
-  // Exclude pre-solar months (produced == 0 with high bills)
-  var rows = billing.filter(function(r) { return r.energy_produced_kwh > 0; });
-  if (rows.length < 3) return { fixed: 10.77, varRate: 0.2117 }; // fallback
+function readRates() {
+  var dailyCons  = parseFloat($('inDailyCons').value)    || 0.49315;
+  var dailyProd  = parseFloat($('inDailyProd').value)    || 0.05951;
+  var energy     = parseFloat($('inEnergyCharge').value) || 0.19342;
+  var extra      = parseFloat($('inExtraCharge').value)  || 0.01213;
+  var buyback    = parseFloat($('inBuyback').value)      || 0.03636;
+  var surcharge  = (parseFloat($('inSurcharge').value)   || 3) / 100;
+  return {
+    dailyCons: dailyCons,
+    dailyProd: dailyProd,
+    consRate:  energy + extra,
+    buyback:   buyback,
+    surcharge: surcharge
+  };
+}
 
-  var n = rows.length;
-  var net = rows.map(function(r) { return Math.max(0, r.energy_consumed_kwh - r.energy_produced_kwh); });
-  var bills = rows.map(function(r) { return r.actual_bill; });
-  var sx = 0, sy = 0, sxy = 0, sx2 = 0;
-  for (var i = 0; i < n; i++) {
-    sx += net[i]; sy += bills[i]; sxy += net[i] * bills[i]; sx2 += net[i] * net[i];
+// Derive the typical meter-read day-of-month from the last billing record
+function getMeterDayOfMonth(billing) {
+  for (var i = billing.length - 1; i >= 0; i--) {
+    var d = new Date(billing[i].meter_date);
+    if (!isNaN(d)) return d.getDate();
   }
-  var denom = n * sx2 - sx * sx;
-  if (Math.abs(denom) < 0.001) return { fixed: sy / n, varRate: 0 };
+  return 20; // fallback
+}
 
-  var varRate = (n * sxy - sx * sy) / denom;
-  var fixed = (sy - varRate * sx) / n;
-  if (fixed < 0) fixed = 0;
-  if (varRate < 0) varRate = 0;
-  return { fixed: fixed, varRate: varRate };
+// Number of days between two meter reads for a given month
+function billingDays(year, month1based, meterDay) {
+  // billing period ends on meterDay of month1based,
+  // starts day after meterDay of previous month
+  var end = new Date(year, month1based - 1, meterDay);
+  var prevMonth = month1based - 2;  // 0-indexed month before
+  var startYear = year;
+  if (prevMonth < 0) { prevMonth = 11; startYear--; }
+  var start = new Date(startYear, prevMonth, meterDay);
+  var diff = Math.round((end - start) / 86400000);
+  return diff > 0 ? diff : 30;
 }
 
 // ============================================================
@@ -338,12 +383,12 @@ function runModel() {
   var degrade = (parseFloat($('inDegrade').value) || 0.5) / 100;
   var fixedEsc = (parseFloat($('inFixedEsc').value) || 4) / 100;
   var avgConsume = parseFloat($('inAvgConsume').value) || 665;
-  var utilRate = parseFloat($('inRate').value) || 0.232;
   var horizonYears = parseInt($('inYears').value) || 25;
   var horizonMonths = horizonYears * 12;
+  var rates = readRates();
 
-  // Decompose bills
-  var decomp = decomposeActualBills(billingData);
+  // Meter day-of-month for billing-day calculation
+  var meterDay = getMeterDayOfMonth(billingData);
   var consumeProfile = buildScaledConsumptionProfile(avgConsume);
   var solarProfile = buildSolarProductionProfile(billingData);
 
@@ -452,19 +497,40 @@ function runModel() {
       helocPaid = monthlyPayment;
       if (helocBalance === 0) helocPaid = interest + princ;
     } else {
-      // Fully forecasted
+      // Fully forecasted — explicit rate schedule
       isActual = false;
       var deg = Math.pow(1 - degrade, yearIndex);
-      var fmCharge = decomp.fixed * Math.pow(1 + fixedEsc, yearIndex);
-      var vRate = decomp.varRate * Math.pow(1 + rateEsc, yearIndex);
       var cp = consumeProfile[calMonth - 1];
       var sprod = solarProfile[calMonth - 1];
       var scaledConsumed = cp.consumed;
       monthProduction = sprod.produced * deg;
-      var netGrid = Math.max(0, scaledConsumed - monthProduction);
-      electricBill = fmCharge + vRate * netGrid;
 
-      estNoSolar = scaledConsumed * utilRate * Math.pow(1 + rateEsc, yearIndex);
+      // Escalated rates
+      var days = billingDays(yearLabel, calMonth, meterDay);
+      var escFixed = Math.pow(1 + fixedEsc, yearIndex);
+      var escRate  = Math.pow(1 + rateEsc, yearIndex);
+      var dailyCons = rates.dailyCons * escFixed;
+      var dailyProd = rates.dailyProd * escFixed;
+      var consRate  = rates.consRate  * escRate;
+      var buyback   = rates.buyback   * escRate;
+
+      var netKwh = scaledConsumed - monthProduction;
+      var subtotal;
+      if (netKwh >= 0) {
+        // Net consumer
+        subtotal = days * (dailyCons + dailyProd)
+                 + netKwh * consRate;
+      } else {
+        // Net producer — buyback credit for excess
+        subtotal = days * (dailyCons + dailyProd)
+                 + netKwh * buyback; // netKwh is negative → subtracts
+      }
+      electricBill = subtotal * (1 + rates.surcharge);
+
+      // No-solar counterfactual: same rate structure, full consumption
+      var noSolarSub = days * (dailyCons + dailyProd)
+                     + scaledConsumed * consRate;
+      estNoSolar = noSolarSub * (1 + rates.surcharge);
 
       // Model HELOC
       interest = helocBalance * apr / 12;
@@ -582,8 +648,8 @@ function renderKPIs(breakevenMo, helocPayoffMo, totalInterest, totalSavings, pea
         '$' + fmt(netOutlay, 0) + ' net outlay');
   }
 
-  // LCOE
-  var utilRate = parseFloat($('inRate').value) || 0.232;
+  // LCOE — compare against current all-in consumption rate
+  var utilRate = rates.consRate;
   var lcoeClass = lifetimeLCOE < utilRate ? 'good' : lifetimeLCOE < utilRate * 1.5 ? 'warn' : 'bad';
   kpi('$' + fmt(lifetimeLCOE, 3), horizonYears + '-Yr Solar LCOE', lcoeClass, fmt(cumProduction, 0) + ' kWh total');
 
