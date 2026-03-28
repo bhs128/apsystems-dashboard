@@ -57,7 +57,7 @@ fi
 # --- 3. Systemd units ---
 echo "[3/4] Installing systemd services ..."
 
-for UNIT in solar-api.service solar-sync.service solar-sync.timer; do
+for UNIT in solar-api.service solar-sync.service solar-sync.timer ez1-logger.service; do
     SRC="$SCRIPT_DIR/$UNIT"
     if [ ! -f "$SRC" ]; then
         echo "  WARNING: $SRC not found, skipping."
@@ -80,6 +80,15 @@ echo "  solar-api started."
 
 sudo systemctl enable --now solar-sync.timer
 echo "  solar-sync.timer enabled (daily at 10pm)."
+
+# EZ1 logger (only if EZ1_IP is configured)
+if grep -q '^EZ1_IP=' "$INSTALL_DIR/.env" 2>/dev/null && \
+   ! grep -q 'your_ez1_ip_here' "$INSTALL_DIR/.env" 2>/dev/null; then
+    sudo systemctl enable --now ez1-logger
+    echo "  ez1-logger started (polling every 60s)."
+else
+    echo "  ez1-logger skipped (set EZ1_IP in .env to enable)."
+fi
 
 echo ""
 echo "=== Setup Complete ==="
