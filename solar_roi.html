@@ -584,7 +584,7 @@ function runModel() {
   var lifetimeLCOE = cumProduction > 0 ? cumSystemCost / cumProduction : 0;
 
   // ---- Render KPIs ----
-  renderKPIs(breakevenMonth, helocPayoffMonth, totalInterest, totalSavings, peakBalance, downPayment, horizonYears, schedule, lifetimeLCOE, cumProduction);
+  renderKPIs(breakevenMonth, helocPayoffMonth, totalInterest, totalSavings, peakBalance, downPayment, horizonYears, schedule, lifetimeLCOE, cumProduction, rates.consRate);
 
   // ---- Render charts ----
   renderMainChart(schedule, breakevenMonth, helocPayoffMonth);
@@ -601,7 +601,7 @@ function runModel() {
 // ============================================================
 //  KPI cards
 // ============================================================
-function renderKPIs(breakevenMo, helocPayoffMo, totalInterest, totalSavings, peakBalance, downPayment, horizonYears, schedule, lifetimeLCOE, cumProduction) {
+function renderKPIs(breakevenMo, helocPayoffMo, totalInterest, totalSavings, peakBalance, downPayment, horizonYears, schedule, lifetimeLCOE, cumProduction, consRate) {
   var html = '';
   function kpi(val, label, cls, sub) {
     html += '<div class="kpi"><div class="val ' + (cls||'') + '">' + val + '</div><div class="lbl">' + label + '</div>';
@@ -648,8 +648,8 @@ function renderKPIs(breakevenMo, helocPayoffMo, totalInterest, totalSavings, pea
         '$' + fmt(netOutlay, 0) + ' net outlay');
   }
 
-  // LCOE — compare against current all-in consumption rate
-  var utilRate = rates.consRate;
+  // LCOE — compare against all-in per-kWh consumption rate (energy + extra charges)
+  var utilRate = consRate;
   var lcoeClass = lifetimeLCOE < utilRate ? 'good' : lifetimeLCOE < utilRate * 1.5 ? 'warn' : 'bad';
   kpi('$' + fmt(lifetimeLCOE, 3), horizonYears + '-Yr Solar LCOE', lcoeClass, fmt(cumProduction, 0) + ' kWh total');
 

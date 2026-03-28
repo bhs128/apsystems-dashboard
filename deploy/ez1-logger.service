@@ -1,0 +1,16 @@
+[Unit]
+Description=EZ1 micro-inverter data logger
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-__INSTALL_DIR__/.env
+ExecStart=__INSTALL_DIR__/venv/bin/python __INSTALL_DIR__/ez1_logger.py --loop 60
+Restart=on-failure
+RestartSec=30
+User=__USER__
+WorkingDirectory=__INSTALL_DIR__
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EZ1 Side Panels</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #0f172a; color: #e2e8f0; padding: 1rem; max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 1.3rem; color: #f59e0b; margin-bottom: 0.25rem; }
+  a { color: #38bdf8; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .subtitle { color: #94a3b8; font-size: 0.75rem; margin-bottom: 1rem; }
+  .nav { font-size: 0.75rem; margin-bottom: 1rem; }
+  .nav a { margin-right: 1rem; }
+  .box { background: #1e293b; border-radius: 0.75rem; padding: 1rem; margin-bottom: 1rem; }
+  h3 { font-size: 0.9rem; color: #f59e0b; margin-bottom: 0.5rem; }
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 0.5rem;
+              margin-bottom: 1rem; }
+  .kpi { background: #0f172a; border: 1px solid #334155; border-radius: 0.5rem;
+         padding: 0.5rem; text-align: center; }
+  .kpi .val { font-size: 1.1rem; font-weight: 700; }
+  .kpi .lbl { font-size: 0.55rem; color: #64748b; text-transform: uppercase; margin-top: 0.1rem; }
+  .kpi .sub { font-size: 0.55rem; color: #94a3b8; }
+  .good { color: #22c55e; } .warn { color: #f59e0b; } .bad { color: #ef4444; }
+  .cyan { color: #38bdf8; }
+  .chart-wrap { position: relative; height: 250px; margin-bottom: 0.5rem; }
+  .chart-wrap canvas { position: absolute; inset: 0; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 600px) { .row2 { grid-template-columns: 1fr; } }
+  table { width: 100%; border-collapse: collapse; font-size: 0.7rem;
+          font-family: 'SF Mono', monospace, monospace; }
+  th, td { padding: 0.2rem 0.4rem; text-align: right; border-bottom: 1px solid #1e293b; }
+  th { color: #64748b; font-weight: 600; font-size: 0.6rem; text-transform: uppercase;
+       position: sticky; top: 0; background: #1e293b; }
+  th:first-child, td:first-child { text-align: left; }
+  .help { font-size: 0.6rem; color: #64748b; }
+  .alarm-ok { color: #22c55e; } .alarm-err { color: #ef4444; font-weight: 700; }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+                margin-right: 6px; vertical-align: middle; }
+</style>
+</head>
+<body>
+
+<h1>&#9889; EZ1 Side Panels</h1>
+<div class="nav">
+  <a href="/">&larr; Main Dashboard</a>
+  <a href="/roi">ROI</a>
+  <a href="/clipping">Clipping</a>
+</div>
+<p class="subtitle">
+  APsystems EZ1 micro-inverter &mdash; 2 side panels (separate from roof array)
+  <span id="deviceInfo"></span>
+</p>
+
+<!-- Live KPIs -->
+<div class="kpi-grid" id="kpis">
+  <div class="kpi"><div class="val cyan">--</div><div class="lbl">Loading...</div></div>
+</div>
+
+<!-- Today's power curve -->
+<div class="box">
+  <h3>Today's Power Curve</h3>
+  <div class="chart-wrap"><canvas id="todayChart"></canvas></div>
+</div>
+
+<!-- Daily production history -->
+<div class="box">
+  <h3>Daily Production History</h3>
+  <div class="chart-wrap"><canvas id="dailyChart"></canvas></div>
+</div>
+
+<!-- Channel comparison -->
+<div class="row2">
+  <div class="box">
+    <h3>Channel Comparison (Today)</h3>
+    <div class="chart-wrap" style="height:200px"><canvas id="channelChart"></canvas></div>
+  </div>
+  <div class="box">
+    <h3>Recent Daily Log</h3>
+    <div style="max-height:220px; overflow-y:auto">
+      <table id="dailyTable">
+        <thead><tr><th>Date</th><th>kWh</th><th>Peak W</th><th>Hrs</th></tr></thead>
+        <tbody id="dailyTbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Alarm status -->
+<div class="box">
+  <h3>Alarm Status</h3>
+  <div id="alarmStatus" class="help">Loading...</div>
+</div>
+
+<script>
+var todayChartObj = null, dailyChartObj = null, channelChartObj = null;
+
+function fmt(n, d) { return n.toLocaleString('en-US', {minimumFractionDigits: d, maximumFractionDigits: d}); }
+
+async function fetchJSON(url) {
+  var r = await fetch(url);
+  if (!r.ok) throw new Error(url + ': ' + r.status);
+  return r.json();
+}
+
+async function init() {
+  try {
+    var results = await Promise.all([
+      fetchJSON('/api/ez1/live'),
+      fetchJSON('/api/ez1/today'),
+      fetchJSON('/api/ez1/daily'),
+      fetchJSON('/api/ez1/device')
+    ]);
+    var live = results[0];
+    var today = results[1];
+    var daily = results[2];
+    var device = results[3];
+
+    renderKPIs(live, daily, device);
+    renderTodayChart(today);
+    renderDailyChart(daily);
+    renderChannelChart(today);
+    renderDailyTable(daily);
+    renderAlarms(live);
+    renderDeviceInfo(device);
+  } catch(e) {
+    document.getElementById('kpis').innerHTML =
+      '<div class="kpi"><div class="val bad">Error</div><div class="lbl">' + e.message + '</div></div>';
+  }
+}
+
+function renderDeviceInfo(device) {
+  if (!device || !device.device_id) return;
+  document.getElementById('deviceInfo').textContent =
+    ' — ' + device.device_id + ' (' + device.dev_ver + ')';
+}
+
+function renderKPIs(live, daily, device) {
+  var html = '';
+  function kpi(val, label, cls, sub) {
+    html += '<div class="kpi"><div class="val ' + (cls||'') + '">' + val + '</div><div class="lbl">' + label + '</div>';
+    if (sub) html += '<div class="sub">' + sub + '</div>';
+    html += '</div>';
+  }
+
+  if (live.p1 !== undefined) {
+    var total = live.p1 + live.p2;
+    var statusCls = total > 0 ? 'good' : 'warn';
+    kpi(fmt(total, 0) + ' W', 'Now', statusCls, 'Ch1: ' + fmt(live.p1, 0) + ' / Ch2: ' + fmt(live.p2, 0));
+  }
+
+  if (live.today_kwh !== undefined) {
+    kpi(fmt(live.today_kwh, 2) + ' kWh', 'Today', 'cyan');
+  }
+
+  if (live.peak_w !== undefined) {
+    kpi(fmt(live.peak_w, 0) + ' W', 'Peak Today', '');
+  }
+
+  if (live.te1 !== undefined) {
+    var lifetime = live.te1 + live.te2;
+    kpi(fmt(lifetime, 1) + ' kWh', 'Lifetime', 'cyan',
+        'Ch1: ' + fmt(live.te1, 1) + ' / Ch2: ' + fmt(live.te2, 1));
+  }
+
+  // Last 7 day average
+  if (daily.length > 1) {
+    var last7 = daily.slice(-7);
+    var avg = last7.reduce(function(s, d) { return s + d.energy_kwh; }, 0) / last7.length;
+    kpi(fmt(avg, 2) + ' kWh', '7-Day Avg', '');
+  }
+
+  // Max power setting
+  if (device && device.max_power) {
+    kpi(device.max_power + ' W', 'Max Power Set', '');
+  }
+
+  document.getElementById('kpis').innerHTML = html;
+}
+
+function renderTodayChart(readings) {
+  if (todayChartObj) todayChartObj.destroy();
+  if (!readings || readings.length === 0) return;
+
+  var labels = readings.map(function(r) { return r.timestamp.slice(11, 16); });
+  var axStyle = { ticks: { color: '#64748b', font: { size: 8 } }, grid: { color: '#1e293b' } };
+
+  todayChartObj = new Chart(document.getElementById('todayChart'), {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [
+        { label: 'Total', data: readings.map(function(r) { return r.p1 + r.p2; }),
+          borderColor: '#f59e0b', borderWidth: 2, pointRadius: 0,
+          fill: true, backgroundColor: '#f59e0b18', tension: 0.3 },
+        { label: 'Ch 1', data: readings.map(function(r) { return r.p1; }),
+          borderColor: '#22c55e', borderWidth: 1.5, pointRadius: 0, borderDash: [4, 2],
+          fill: false, tension: 0.3 },
+        { label: 'Ch 2', data: readings.map(function(r) { return r.p2; }),
+          borderColor: '#38bdf8', borderWidth: 1.5, pointRadius: 0, borderDash: [4, 2],
+          fill: false, tension: 0.3 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { display: true, labels: { color: '#94a3b8', boxWidth: 10, font: { size: 9 } } } },
+      scales: {
+        x: Object.assign({}, axStyle, { ticks: { maxTicksLimit: 12 } }),
+        y: Object.assign({}, axStyle, {
+          min: 0,
+          title: { display: true, text: 'Watts', color: '#64748b' }
+        })
+      }
+    }
+  });
+}
+
+function renderDailyChart(daily) {
+  if (dailyChartObj) dailyChartObj.destroy();
+  if (!daily || daily.length === 0) return;
+
+  var axStyle = { ticks: { color: '#64748b', font: { size: 8 } }, grid: { color: '#1e293b' } };
+
+  dailyChartObj = new Chart(document.getElementById('dailyChart'), {
+    type: 'bar',
+    data: {
+      labels: daily.map(function(d) { return d.date; }),
+      datasets: [{
+        label: 'kWh',
+        data: daily.map(function(d) { return d.energy_kwh; }),
+        backgroundColor: '#f59e0b88',
+        borderRadius: 3, borderSkipped: false
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: Object.assign({}, axStyle, { ticks: { maxRotation: 45 } }),
+        y: Object.assign({}, axStyle, {
+          min: 0,
+          title: { display: true, text: 'kWh', color: '#64748b' }
+        })
+      }
+    }
+  });
+}
+
+function renderChannelChart(readings) {
+  if (channelChartObj) channelChartObj.destroy();
+  if (!readings || readings.length === 0) return;
+
+  var ch1sum = 0, ch2sum = 0, n = 0;
+  readings.forEach(function(r) {
+    if (r.p1 > 0 || r.p2 > 0) { ch1sum += r.p1; ch2sum += r.p2; n++; }
+  });
+
+  channelChartObj = new Chart(document.getElementById('channelChart'), {
+    type: 'doughnut',
+    data: {
+      labels: ['Channel 1', 'Channel 2'],
+      datasets: [{
+        data: [ch1sum, ch2sum],
+        backgroundColor: ['#22c55e', '#38bdf8'],
+        borderWidth: 0
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {
+        legend: { display: true, position: 'bottom',
+                  labels: { color: '#94a3b8', font: { size: 10 } } },
+        tooltip: {
+          callbacks: {
+            label: function(ctx) {
+              var total = ctx.dataset.data.reduce(function(a, b) { return a + b; }, 0);
+              var pct = total > 0 ? (ctx.parsed / total * 100).toFixed(1) : 0;
+              return ctx.label + ': ' + pct + '%';
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+function renderDailyTable(daily) {
+  var tbody = document.getElementById('dailyTbody');
+  var recent = daily.slice(-30).reverse();
+  var html = '';
+  recent.forEach(function(d) {
+    html += '<tr><td>' + d.date + '</td><td>' + fmt(d.energy_kwh, 2) +
+            '</td><td>' + fmt(d.peak_w, 0) + '</td><td>' + fmt(d.hours, 1) + '</td></tr>';
+  });
+  tbody.innerHTML = html;
+}
+
+function renderAlarms(live) {
+  var el = document.getElementById('alarmStatus');
+  if (!live.alarms) { el.textContent = 'No alarm data'; return; }
+  var a = live.alarms;
+  var items = [
+    { label: 'Off Grid', val: a.off_grid },
+    { label: 'Output Fault', val: a.output_err },
+    { label: 'DC1 Short', val: a.dc1_short },
+    { label: 'DC2 Short', val: a.dc2_short }
+  ];
+  var html = '';
+  items.forEach(function(it) {
+    var ok = it.val === 0;
+    html += '<span class="status-dot" style="background:' + (ok ? '#22c55e' : '#ef4444') + '"></span>';
+    html += '<span class="' + (ok ? 'alarm-ok' : 'alarm-err') + '">' + it.label + ': ' + (ok ? 'OK' : 'ALARM') + '</span>&emsp;';
+  });
+  el.innerHTML = html;
+}
+
+// Auto-refresh every 60s
+init();
+setInterval(init, 60000);
+</script>
+</body>
+</html>

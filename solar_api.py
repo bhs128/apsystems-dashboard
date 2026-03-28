@@ -87,6 +87,120 @@ def roi_page():
 def vue_explorer_page():
     return send_from_directory(SERVICE_DIR, 'vue_data_explorer.html')
 
+@app.route('/battery')
+def battery_page():
+    return send_from_directory(SERVICE_DIR, 'battery_sim.html')
+
+@app.route('/ez1')
+def ez1_page():
+    return send_from_directory(SERVICE_DIR, 'ez1_dashboard.html')
+
+
+# ------------------------------------------------------------------
+# EZ1 micro-inverter API (separate side-panel system)
+# ------------------------------------------------------------------
+
+def _ez1_db():
+    import sqlite3
+    path = os.path.join(SERVICE_DIR, 'ez1.db')
+    if not os.path.exists(path):
+        return None
+    return sqlite3.connect(path)
+
+
+@app.route('/api/ez1/live')
+def api_ez1_live():
+    """Latest reading + today's rollup + alarms."""
+    conn = _ez1_db()
+    if not conn:
+        return jsonify({'error': 'ez1.db not found'}), 404
+    row = conn.execute(
+        'SELECT p1, p2, e1, e2, te1, te2 FROM ez1_readings'
+        ' ORDER BY timestamp DESC LIMIT 1').fetchone()
+    daily = conn.execute(
+        'SELECT energy_kwh, peak_w FROM ez1_daily'
+        ' WHERE date = date("now", "localtime")').fetchone()
+    alarm = conn.execute(
+        'SELECT off_grid, output_err, dc1_short, dc2_short FROM ez1_alarms'
+        ' ORDER BY timestamp DESC LIMIT 1').fetchone()
+    conn.close()
+    result = {}
+    if row:
+        result.update({'p1': row[0], 'p2': row[1], 'e1': row[2],
+                       'e2': row[3], 'te1': row[4], 'te2': row[5]})
+    if daily:
+        result['today_kwh'] = daily[0]
+        result['peak_w'] = daily[1]
+    if alarm:
+        result['alarms'] = {'off_grid': alarm[0], 'output_err': alarm[1],
+                            'dc1_short': alarm[2], 'dc2_short': alarm[3]}
+    return jsonify(result)
+
+
+@app.route('/api/ez1/today')
+def api_ez1_today():
+    """All readings for today (power curve)."""
+    conn = _ez1_db()
+    if not conn:
+        return jsonify([]), 404
+    rows = conn.execute(
+        'SELECT timestamp, p1, p2, e1, e2, te1, te2 FROM ez1_readings'
+        ' WHERE timestamp LIKE date("now", "localtime") || "%"'
+        ' ORDER BY timestamp').fetchall()
+    conn.close()
+    return jsonify([{'timestamp': r[0], 'p1': r[1], 'p2': r[2],
+                     'e1': r[3], 'e2': r[4], 'te1': r[5], 'te2': r[6]}
+                    for r in rows])
+
+
+@app.route('/api/ez1/daily')
+def api_ez1_daily():
+    """Daily production history."""
+    conn = _ez1_db()
+    if not conn:
+        return jsonify([]), 404
+    rows = conn.execute(
+        'SELECT date, energy_kwh, peak_w, hours FROM ez1_daily'
+        ' ORDER BY date').fetchall()
+    conn.close()
+    return jsonify([{'date': r[0], 'energy_kwh': r[1],
+                     'peak_w': r[2], 'hours': r[3]} for r in rows])
+
+
+@app.route('/api/ez1/device')
+def api_ez1_device():
+    """EZ1 device info."""
+    conn = _ez1_db()
+    if not conn:
+        return jsonify({}), 404
+    row = conn.execute(
+        'SELECT device_id, dev_ver, min_power, max_power, last_seen'
+        ' FROM ez1_device LIMIT 1').fetchone()
+    conn.close()
+    if not row:
+        return jsonify({})
+    return jsonify({'device_id': row[0], 'dev_ver': row[1],
+                    'min_power': row[2], 'max_power': row[3],
+                    'last_seen': row[4]})
+
+
+@app.route('/api/hourly_energy')
+def api_hourly_energy():
+    """Return hourly solar + grid data from VUE for battery simulation."""
+    import sqlite3 as _sql
+    vue_db = os.path.join(SERVICE_DIR, 'vue_energy.db')
+    if not os.path.exists(vue_db):
+        return jsonify({'error': 'vue_energy.db not found'}), 404
+    conn = _sql.connect(vue_db)
+    rows = conn.execute("""
+        SELECT timestamp_utc, solar_total_kw, grid_net_kw
+        FROM vue_energy_hourly
+        WHERE solar_total_kw IS NOT NULL AND grid_net_kw IS NOT NULL
+        ORDER BY timestamp_utc
+    """).fetchall()
+    conn.close()
+    return jsonify([{'ts': r[0], 'solar': r[1], 'grid': r[2]} for r in rows])
+
 
 @app.route('/api/status')
 def api_status():
