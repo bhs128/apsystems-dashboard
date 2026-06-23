@@ -4,6 +4,9 @@
 *.db-wal
 .env
 .ema_credentials
+config.yaml
+config.yml
+config.local.yaml
 
 # Python
 __pycache__/
@@ -17,6 +20,7 @@ panel_data/
 temp_vue_data/
 *.xls
 *.csv
+*.zip
 *.bak
 !requirements.txt
 

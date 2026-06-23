@@ -54,11 +54,22 @@
   .clip-bar { display: inline-block; height: 10px; border-radius: 2px; }
   .legend-item { display: inline-flex; align-items: center; gap: 0.3rem; margin-right: 1rem; font-size: 0.7rem; color: #94a3b8; }
   .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .nav { font-size: 0.75rem; margin-bottom: 1rem; }
+  .nav a { margin-right: 1rem; color: #38bdf8; text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 
 <h1>&#9889; Inverter Clipping Analysis</h1>
+<div class="nav">
+  <a href="/">Dashboard</a>
+  <a href="/clipping">Clipping</a>
+  <a href="/field">Field Log</a>
+  <a href="/roi">ROI</a>
+  <a href="/ez1">EZ1</a>
+  <a href="/vue-explorer">VUE Explorer</a>
+</div>
 <p class="subtitle">DS3-S per-channel DC telemetry &mdash; quantify power lost to inverter clipping (320W/ch)</p>
 
 <!-- Controls -->

@@ -332,6 +332,78 @@ def api_inverter_telemetry():
     return jsonify(df_to_json(df))
 
 
+# Cache EMA credentials so we don't re-read .env on every live request.
+_ema_creds = None
+
+
+def _get_ema_credentials():
+    """Lazily load (app_id, app_secret) from the EMA config, or None if missing."""
+    global _ema_creds
+    if _ema_creds is not None:
+        return _ema_creds
+    import ema_api_pull as ema
+    try:
+        _ema_creds = ema.load_credentials()  # also populates SYSTEM_ID / ECU_ID
+    except SystemExit:
+        _ema_creds = None
+    return _ema_creds
+
+
+@app.route('/api/live/telemetry')
+def api_live_telemetry():
+    """Live spot-check: pull today's per-channel telemetry for a single inverter
+    straight from the APsystems EMA cloud (5-min granularity, slight cloud lag).
+
+    Query params:
+      uid  — inverter UID (required)
+      date — YYYY-MM-DD (optional, defaults to today, local)
+
+    Returns {uid, date, samples:[{time, dc_p1, dc_p2, dc_v1, dc_v2,
+             dc_i1, dc_i2, ac_p, ac_v, ac_f, temp}]}.
+    """
+    from datetime import datetime as _dt
+
+    uid = request.args.get('uid')
+    if not uid:
+        return jsonify({'error': 'uid parameter required'}), 400
+    date = request.args.get('date') or _dt.now().strftime('%Y-%m-%d')
+
+    creds = _get_ema_credentials()
+    if not creds:
+        return jsonify({'error': 'EMA API credentials not configured on server'}), 503
+    app_id, app_secret = creds
+
+    import ema_api_pull as ema
+    try:
+        data = ema.pull_panel_single_inverter(app_id, app_secret, uid, date)
+    except Exception as exc:  # network / API failure
+        return jsonify({'error': f'EMA API request failed: {exc}'}), 502
+
+    if not data or 't' not in data:
+        return jsonify({'uid': uid, 'date': date, 'samples': []})
+
+    times = data['t']
+
+    def fval(key, idx):
+        try:
+            v = data.get(key, [])
+            return float(v[idx]) if idx < len(v) and v[idx] not in (None, '') else None
+        except (ValueError, TypeError):
+            return None
+
+    samples = []
+    for j, t in enumerate(times):
+        samples.append({
+            'time': t,
+            'dc_p1': fval('dc_p1', j), 'dc_p2': fval('dc_p2', j),
+            'dc_v1': fval('dc_v1', j), 'dc_v2': fval('dc_v2', j),
+            'dc_i1': fval('dc_i1', j), 'dc_i2': fval('dc_i2', j),
+            'ac_p': fval('ac_p1', j), 'ac_v': fval('ac_v1', j),
+            'ac_f': fval('ac_f', j), 'temp': fval('ac_t', j),
+        })
+    return jsonify({'uid': uid, 'date': date, 'samples': samples})
+
+
 @app.route('/api/panels', methods=['GET'])
 def api_panels_get():
     """Return panel metadata (user-assigned config + specs)."""

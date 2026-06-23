@@ -70,11 +70,22 @@
   .tab.active { color: #f59e0b; background: #1e293b; border-color: #475569; }
   .tab-content { display: none; }
   .tab-content.active { display: block; }
+  .nav { font-size: 0.75rem; margin-bottom: 1rem; }
+  .nav a { margin-right: 1rem; color: #38bdf8; text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 
 <h1>&#9728; Solar Field Logger</h1>
+<div class="nav">
+  <a href="/">Dashboard</a>
+  <a href="/clipping">Clipping</a>
+  <a href="/field">Field Log</a>
+  <a href="/roi">ROI</a>
+  <a href="/ez1">EZ1</a>
+  <a href="/vue-explorer">VUE Explorer</a>
+</div>
 <p class="subtitle">Fluke IRR1-SOL irradiance measurements &amp; production analysis &mdash; standalone, no server required</p>
 
 <!-- Site Configuration -->
@@ -174,6 +185,45 @@
         <button class="btn-primary btn-sm" onclick="fetchWeatherNow()" id="btnFetchWeather">&#9729; Fetch Current Weather</button>
         <span id="fetchStatus" style="font-size:0.7rem;color:#94a3b8;margin-left:0.4rem"></span>
       </div>
+    </div>
+  </div>
+
+  <!-- Live Panel Capture (APsystems EMA) -->
+  <div class="weather-box" style="margin-top:0.75rem">
+    <span class="weather-box-label">Live Panel Capture &mdash; APsystems EMA</span>
+    <p class="help" style="margin-top:0.25rem">
+      Polls the selected inverter channel from the APsystems cloud while you take the Fluke reading.
+      EMA telemetry is 5-min granularity with a few minutes of cloud lag, so a short capture records
+      the interval(s) around your reading (DC&nbsp;V/I/P + inverter temp). Requires the dashboard server.
+    </p>
+    <div class="field-row3" style="margin-top:0.25rem">
+      <div>
+        <label>Panel / Channel</label>
+        <select id="capPanel"><option value="">Loading&hellip;</option></select>
+      </div>
+      <div>
+        <label>Capture Duration</label>
+        <select id="capDuration">
+          <option value="120">2 minutes</option>
+          <option value="180" selected>3 minutes</option>
+          <option value="300">5 minutes</option>
+          <option value="600">10 minutes</option>
+        </select>
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:0.4rem">
+        <button class="btn-primary btn-sm" id="capStartBtn" onclick="startCapture()">Start Capture</button>
+        <button class="btn-red btn-sm" id="capStopBtn" onclick="stopCapture()" style="display:none">Stop</button>
+      </div>
+    </div>
+    <div id="capStatus" style="font-size:0.7rem;color:#94a3b8;margin-bottom:0.25rem"></div>
+    <div id="capLatest" class="result-box" style="display:none;margin-bottom:0.5rem"></div>
+    <div id="capTableWrap" style="display:none;overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th>Time</th><th>DC V</th><th>DC I (A)</th><th>DC P (W)</th><th>Inv &deg;C</th>
+        </tr></thead>
+        <tbody id="capTableBody"></tbody>
+      </table>
     </div>
   </div>
 
@@ -598,6 +648,12 @@ function logMeasurement() {
     tempFactor: Math.round(expected.tempFactor * 1000) / 1000
   };
 
+  // Attach a completed live capture, if one is pending
+  if (lastCapture && lastCapture.samples && lastCapture.samples.length) {
+    entry.liveCapture = lastCapture;
+    lastCapture = null;
+  }
+
   var log = loadLog();
   log.push(entry);
   log.sort(function(a, b) { return a.dt < b.dt ? -1 : 1; });
@@ -652,6 +708,18 @@ function showInstantResult(e, site) {
     html += '</p>';
   }
 
+  if (e.liveCapture && e.liveCapture.stats) {
+    var c = e.liveCapture.stats;
+    html += '<div style="margin-top:0.5rem;border-top:1px solid #334155;padding-top:0.5rem">';
+    html += '<div style="font-size:0.65rem;color:#64748b;text-transform:uppercase;margin-bottom:0.25rem">Live Panel Capture — ' + e.liveCapture.label + ' (' + c.n + ' sample' + (c.n === 1 ? '' : 's') + ')</div>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:0.25rem 0">';
+    html += '<div class="stat"><div class="lbl">Avg DC V</div><div class="val">' + (c.dc_v != null ? c.dc_v.toFixed(1) : '—') + ' V</div></div>';
+    html += '<div class="stat"><div class="lbl">Avg DC I</div><div class="val">' + (c.dc_i != null ? c.dc_i.toFixed(2) : '—') + ' A</div></div>';
+    html += '<div class="stat"><div class="lbl">Avg DC P</div><div class="val">' + (c.dc_p != null ? Math.round(c.dc_p) : '—') + ' W</div></div>';
+    html += '<div class="stat"><div class="lbl">Avg Inv Temp</div><div class="val">' + (c.temp != null ? c.temp.toFixed(1) : '—') + ' °C</div></div>';
+    html += '</div></div>';
+  }
+
   body.innerHTML = html;
 }
 
@@ -679,8 +747,10 @@ function renderLog() {
       : '<span class="badge" style="background:#fb923c22;color:#fb923c">GHI</span>';
     var rawIrr = e.irrRaw != null ? Math.round(e.irrRaw) : e.poaIrr;
     var poaText = e.measType === 'poa' ? '=' : String(e.poaIrr);
+    var capMark = e.liveCapture ? ' <span class="badge" style="background:#f59e0b22;color:#f59e0b" title="' +
+      e.liveCapture.label + ' — ' + e.liveCapture.stats.n + ' sample(s)">⚡</span>' : '';
     html += '<tr>' +
-      '<td style="white-space:nowrap">' + e.dt.replace('T', ' ') + '</td>' +
+      '<td style="white-space:nowrap">' + e.dt.replace('T', ' ') + capMark + '</td>' +
       '<td>' + badge + '</td>' +
       '<td>' + rawIrr + '</td>' +
       '<td>' + (e.powerW != null ? e.powerW : '—') + '</td>' +
@@ -715,13 +785,20 @@ function exportCSV() {
   if (!log.length) { toast('No data to export', false); return; }
   var headers = ['datetime','type','irr_raw_wm2','poa_wm2','actual_W','expected_clipped_W',
     'expected_unclipped_W','ratio','k_eff','k_seasonal','elevation','temp_C',
-    'rh_pct','pm25_ugm3','panel_temp_C','notes'];
+    'rh_pct','pm25_ugm3','panel_temp_C','notes',
+    'cap_panel','cap_n','cap_dc_v','cap_dc_i','cap_dc_p','cap_inv_temp_C'];
   var rows = [headers.join(',')];
   log.forEach(function(e) {
+    var c = e.liveCapture ? e.liveCapture.stats : null;
     rows.push([
       e.dt, e.measType, e.irrRaw, e.poaIrr, e.powerW || '', e.expectedClipped,
       e.expectedUnclipped, e.ratio || '', e.kEff || '', e.kSeasonal, e.elevation,
-      e.tempC || '', e.rh || '', e.pm25 || '', e.panelTemp, '"' + (e.notes || '').replace(/"/g, '""') + '"'
+      e.tempC || '', e.rh || '', e.pm25 || '', e.panelTemp, '"' + (e.notes || '').replace(/"/g, '""') + '"',
+      e.liveCapture ? '"' + e.liveCapture.label.replace(/"/g, '""') + '"' : '',
+      c ? c.n : '', c && c.dc_v != null ? c.dc_v.toFixed(1) : '',
+      c && c.dc_i != null ? c.dc_i.toFixed(2) : '',
+      c && c.dc_p != null ? Math.round(c.dc_p) : '',
+      c && c.temp != null ? c.temp.toFixed(1) : ''
     ].join(','));
   });
   var blob = new Blob([rows.join('\n')], { type: 'text/csv' });
@@ -919,9 +996,186 @@ function renderAnalysis() {
 }
 
 // ============================================================
+//  Live Panel Capture (APsystems EMA)
+// ============================================================
+var capState = { running: false, uid: null, channel: 1, label: '',
+                 date: '', timer: null, endTime: 0, samples: {} };
+var lastCapture = null;  // most recent completed capture, attached to next log entry
+
+function todayLocal() {
+  var d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+}
+
+async function loadPanels() {
+  var sel = document.getElementById('capPanel');
+  try {
+    var res = await fetch('/api/panels');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    var panels = await res.json();
+    if (!Array.isArray(panels) || !panels.length) throw new Error('no panels');
+    var opts = '';
+    panels.forEach(function(p) {
+      if (!p.inverter_uid || p.channel == null) return;
+      var desc = p.panel_name || p.array_name ||
+                 (p.array_row != null ? 'R' + p.array_row + 'C' + p.array_col : '');
+      var label = p.inverter_uid + '-' + p.channel + (desc ? ' (' + desc + ')' : '');
+      opts += '<option value="' + p.inverter_uid + '|' + p.channel + '">' + label + '</option>';
+    });
+    sel.innerHTML = opts || '<option value="">No panels found</option>';
+  } catch (e) {
+    // Fall back to raw inverter list (assume channels 1 & 2)
+    try {
+      var r2 = await fetch('/api/inverters');
+      var invs = await r2.json();
+      var opts2 = '';
+      (invs || []).forEach(function(iv) {
+        var uid = iv.uid || iv.inverter_uid;
+        if (!uid) return;
+        opts2 += '<option value="' + uid + '|1">' + uid + '-1</option>';
+        opts2 += '<option value="' + uid + '|2">' + uid + '-2</option>';
+      });
+      sel.innerHTML = opts2 || '<option value="">No inverters found</option>';
+    } catch (e2) {
+      sel.innerHTML = '<option value="">Server unavailable</option>';
+    }
+  }
+}
+
+function capSetStatus(msg, color) {
+  var el = document.getElementById('capStatus');
+  el.textContent = msg;
+  el.style.color = color || '#94a3b8';
+}
+
+function startCapture() {
+  if (capState.running) return;
+  var sel = document.getElementById('capPanel');
+  var val = sel.value;
+  if (!val || val.indexOf('|') < 0) { toast('Select a panel/channel first', false); return; }
+  var parts = val.split('|');
+  var duration = parseInt(document.getElementById('capDuration').value) || 180;
+
+  capState = {
+    running: true, uid: parts[0], channel: parseInt(parts[1]) || 1,
+    label: sel.options[sel.selectedIndex].text, date: todayLocal(),
+    timer: null, endTime: Date.now() + duration * 1000, samples: {}
+  };
+
+  document.getElementById('capStartBtn').style.display = 'none';
+  document.getElementById('capStopBtn').style.display = '';
+  sel.disabled = true;
+  document.getElementById('capDuration').disabled = true;
+  document.getElementById('capTableWrap').style.display = '';
+  document.getElementById('capTableBody').innerHTML = '';
+  capSetStatus('Capturing ' + capState.label + ' \u2014 polling APsystems\u2026', '#f59e0b');
+
+  pollCapture();
+  capState.timer = setInterval(function() {
+    if (Date.now() >= capState.endTime) { stopCapture(); return; }
+    pollCapture();
+  }, 20000);  // EMA is 5-min data; poll every 20s to catch new samples promptly
+}
+
+async function pollCapture() {
+  if (!capState.running) return;
+  var ch = capState.channel;
+  try {
+    var res = await fetch('/api/live/telemetry?uid=' + encodeURIComponent(capState.uid) +
+                          '&date=' + capState.date);
+    if (!res.ok) {
+      var err = await res.json().catch(function() { return {}; });
+      throw new Error(err.error || ('HTTP ' + res.status));
+    }
+    var data = await res.json();
+    (data.samples || []).forEach(function(s) {
+      var dcv = ch === 2 ? s.dc_v2 : s.dc_v1;
+      var dci = ch === 2 ? s.dc_i2 : s.dc_i1;
+      var dcp = ch === 2 ? s.dc_p2 : s.dc_p1;
+      // Only keep intervals that actually have channel data
+      if (dcv == null && dci == null && dcp == null) return;
+      capState.samples[s.time] = { time: s.time, dc_v: dcv, dc_i: dci,
+                                   dc_p: dcp, temp: s.temp };
+    });
+    renderCapture();
+    var secsLeft = Math.max(0, Math.round((capState.endTime - Date.now()) / 1000));
+    var n = Object.keys(capState.samples).length;
+    capSetStatus('Capturing ' + capState.label + ' \u2014 ' + n + ' sample(s), ' +
+                 secsLeft + 's left', '#f59e0b');
+  } catch (e) {
+    capSetStatus('\u2717 ' + e.message, '#ef4444');
+  }
+}
+
+function captureRows() {
+  return Object.keys(capState.samples).sort().map(function(k) { return capState.samples[k]; });
+}
+
+function fmt(v, d) { return v == null ? '\u2014' : (d != null ? v.toFixed(d) : v); }
+
+function renderCapture() {
+  var rows = captureRows();
+  var body = document.getElementById('capTableBody');
+  body.innerHTML = rows.map(function(s) {
+    return '<tr><td>' + s.time + '</td><td>' + fmt(s.dc_v, 1) + '</td><td>' +
+      fmt(s.dc_i, 2) + '</td><td>' + fmt(s.dc_p, 0) + '</td><td>' +
+      fmt(s.temp, 1) + '</td></tr>';
+  }).join('');
+
+  var latest = rows[rows.length - 1];
+  var box = document.getElementById('capLatest');
+  if (latest) {
+    box.style.display = '';
+    box.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:0.25rem 0">' +
+      '<div class="stat"><div class="lbl">Latest @ ' + latest.time + '</div><div class="val">' +
+        fmt(latest.dc_p, 0) + ' W</div></div>' +
+      '<div class="stat"><div class="lbl">DC Voltage</div><div class="val">' + fmt(latest.dc_v, 1) + ' V</div></div>' +
+      '<div class="stat"><div class="lbl">DC Current</div><div class="val">' + fmt(latest.dc_i, 2) + ' A</div></div>' +
+      '<div class="stat"><div class="lbl">Inverter Temp</div><div class="val">' + fmt(latest.temp, 1) + ' \u00b0C</div></div>' +
+      '</div>';
+  } else {
+    box.style.display = 'none';
+  }
+}
+
+function captureStats(rows) {
+  function avg(key) {
+    var vals = rows.map(function(s) { return s[key]; }).filter(function(v) { return v != null; });
+    if (!vals.length) return null;
+    return vals.reduce(function(a, b) { return a + b; }, 0) / vals.length;
+  }
+  return { dc_v: avg('dc_v'), dc_i: avg('dc_i'), dc_p: avg('dc_p'),
+           temp: avg('temp'), n: rows.length };
+}
+
+function stopCapture() {
+  if (capState.timer) clearInterval(capState.timer);
+  capState.timer = null;
+  capState.running = false;
+  document.getElementById('capStartBtn').style.display = '';
+  document.getElementById('capStopBtn').style.display = 'none';
+  document.getElementById('capPanel').disabled = false;
+  document.getElementById('capDuration').disabled = false;
+
+  var rows = captureRows();
+  if (rows.length) {
+    var stats = captureStats(rows);
+    lastCapture = { uid: capState.uid, channel: capState.channel,
+                    label: capState.label, date: capState.date,
+                    samples: rows, stats: stats };
+    capSetStatus('\u2713 Captured ' + rows.length + ' sample(s) for ' + capState.label +
+                 ' \u2014 will attach to the next logged measurement.', '#22c55e');
+  } else {
+    capSetStatus('No samples captured (panel may be offline or cloud not yet updated).', '#f59e0b');
+  }
+}
+
+// ============================================================
 //  Init
 // ============================================================
 populateSiteConfig();
+loadPanels();
 // Set default datetime to now
 var now = new Date();
 now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
