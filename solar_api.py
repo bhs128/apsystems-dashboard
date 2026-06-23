@@ -404,6 +404,41 @@ def api_live_telemetry():
     return jsonify({'uid': uid, 'date': date, 'samples': samples})
 
 
+def _config_value(name, default=None):
+    """Read a config value from the environment, falling back to the .env file."""
+    val = os.environ.get(name)
+    if val:
+        return val
+    env_path = os.path.join(SERVICE_DIR, '.env')
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                key, v = line.split('=', 1)
+                if key.strip() == name:
+                    return v.strip()
+    return default
+
+
+@app.route('/api/config')
+def api_config():
+    """Non-secret site config for client dashboards (location & timezone).
+    Sourced from SOLAR_LAT / SOLAR_LON / SOLAR_TZ so coordinates stay out of
+    version control."""
+    def _f(name):
+        try:
+            return float(_config_value(name, ''))
+        except (TypeError, ValueError):
+            return None
+    return jsonify({
+        'lat': _f('SOLAR_LAT'),
+        'lon': _f('SOLAR_LON'),
+        'timezone': _config_value('SOLAR_TZ', 'auto'),
+    })
+
+
 @app.route('/api/panels', methods=['GET'])
 def api_panels_get():
     """Return panel metadata (user-assigned config + specs)."""
