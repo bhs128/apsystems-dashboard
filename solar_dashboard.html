@@ -537,7 +537,7 @@ async function loadPanelOverlay(dateVal) {
   });
 
   // --- Array orientation ---
-  var LAT = 0.00, LON = 0.00;  // set to your site's latitude / longitude
+  var LAT = SITE.lat, LON = SITE.lon;
   var tilt = 39.8, panelAz = 180, panelW = 410;
   if (arrays && arrays.length) {
     var a = arrays[0];
@@ -1333,7 +1333,7 @@ async function loadSliderDay() {
   hourIndices.sort(function(a, b) { return a.idx - b.idx; });
 
   var total = sliderTimestamps.length - 1;
-  var LAT = 0.00, LON = 0.00;  // set to your site's latitude / longitude
+  var LAT = SITE.lat, LON = SITE.lon;
   var timeLabelHtml = '';
   var elevLabelHtml = '';
   hourIndices.forEach(function(h, i) {
@@ -1820,9 +1820,21 @@ async function saveSlots() {
   }
 }
 
+// ---- Site config (location/timezone from server env, not hardcoded) ----
+var SITE = { lat: 0, lon: 0, timezone: 'auto' };
+async function loadSiteConfig() {
+  try {
+    var c = await get('/api/config');
+    if (c && c.lat != null) SITE.lat = c.lat;
+    if (c && c.lon != null) SITE.lon = c.lon;
+    if (c && c.timezone) SITE.timezone = c.timezone;
+  } catch (e) { /* keep defaults — models just won't be location-accurate */ }
+}
+
 // ---- Init ----
 (async function() {
   try {
+    await loadSiteConfig();
     await Promise.all([
       loadStatus(), loadDaily(), loadBilling(), loadFinance(),
       loadPanelHeat(), loadPanelSummary(), loadPanelConfig(),
