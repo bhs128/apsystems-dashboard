@@ -22,7 +22,8 @@ from zoneinfo import ZoneInfo
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-LOCAL_TZ = ZoneInfo("UTC")
+# Local timezone of the VUE export data — set via SOLAR_TZ in .env.
+LOCAL_TZ = ZoneInfo(os.environ.get("SOLAR_TZ", "UTC"))
 UTC = ZoneInfo("UTC")
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vue_energy.db")
@@ -232,7 +233,7 @@ def parse_naive_ts(s):
 def monotonic_to_utc(rows_naive):
     """
     Walk rows in file order (monotonic real time), converting naive
-    UTC timestamps to UTC, correctly handling:
+    local-timezone timestamps to UTC, correctly handling:
       - Spring forward: 01:45 -> 03:00 (no 02:xx exists; both are unambiguous)
       - Fall back: 01:xx appears twice; first occurrence is CDT, second is CST
     

@@ -64,7 +64,13 @@ PANEL_DATA_START = '2025-08-01'
 # --- Weather / atmospheric config (from .env or environment) ---
 OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast'
 AQICN_TOKEN = os.environ.get('AQICN_TOKEN', '')
-AQICN_STATION = os.environ.get('AQICN_STATION', '0')
+AQICN_STATION = os.environ.get('AQICN_STATION', '')
+
+# Site location for weather lookups (set in .env). timezone 'auto' lets
+# Open-Meteo infer the zone from the coordinates.
+SOLAR_LAT = os.environ.get('SOLAR_LAT', '')
+SOLAR_LON = os.environ.get('SOLAR_LON', '')
+SOLAR_TZ = os.environ.get('SOLAR_TZ', 'auto')
 
 # Solcast config
 SOLCAST_API_KEY = os.environ.get('SOLCAST_API_KEY', '')
@@ -668,13 +674,17 @@ def sync_weather(db):
     today = datetime.now().strftime('%Y-%m-%d')
     week_ago = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
 
+    if not SOLAR_LAT or not SOLAR_LON:
+        print('  Weather: SOLAR_LAT/SOLAR_LON not set, skipping.')
+        return
+
     # --- Open-Meteo: daily + hourly for PWV derivation ---
     params = (
-        f'?latitude=0.00&longitude=0.00'
+        f'?latitude={SOLAR_LAT}&longitude={SOLAR_LON}'
         f'&daily=temperature_2m_max,temperature_2m_min,'
         f'dewpoint_2m_mean,precipitation_sum,shortwave_radiation_sum'
         f'&hourly=cloud_cover,relative_humidity_2m,surface_pressure,dewpoint_2m'
-        f'&timezone=UTC'
+        f'&timezone={SOLAR_TZ}'
         f'&start_date={week_ago}&end_date={today}'
     )
     meteo = _http_get_json(OPEN_METEO_URL + params)

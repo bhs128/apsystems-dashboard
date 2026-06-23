@@ -69,9 +69,12 @@
 
 <h1>&#9728; Solar ROI &amp; Payback Timeline</h1>
 <div class="nav">
-  <a href="/">&larr; Dashboard</a>
-  <a href="/field">Field Log</a>
+  <a href="/">Dashboard</a>
   <a href="/clipping">Clipping</a>
+  <a href="/field">Field Log</a>
+  <a href="/roi">ROI</a>
+  <a href="/ez1">EZ1</a>
+  <a href="/vue-explorer">VUE Explorer</a>
 </div>
 <p class="subtitle">25-year payback-to-profit projection &mdash; actual data shaded solid, forecast dashed</p>
 
@@ -117,6 +120,11 @@
       <div>
         <label>Forecast Horizon (years)</label>
         <input type="number" id="inYears" step="1" value="25" min="5" max="40">
+      </div>
+      <div>
+        <label>Discount Rate (%)</label>
+        <input type="number" id="inDiscount" step="0.5" value="5">
+        <p class="help">For NPV &amp; SIR (nominal)</p>
       </div>
     </div>
     <h3 class="collapsible" onclick="toggleSection(this, 'utilityRates')" style="margin-top:0.75rem">Utility Rates</h3>
@@ -385,6 +393,7 @@ function runModel() {
   var avgConsume = parseFloat($('inAvgConsume').value) || 665;
   var horizonYears = parseInt($('inYears').value) || 25;
   var horizonMonths = horizonYears * 12;
+  var discountRate = (parseFloat($('inDiscount').value) || 5) / 100;
   var rates = readRates();
 
   // Meter day-of-month for billing-day calculation
@@ -452,6 +461,8 @@ function runModel() {
   var totalInterest = 0;
   var breakevenMonth = null;
   var helocPayoffMonth = null;
+  var npv = -downPayment;
+  var pvSavings = 0;
   for (var mo = 0; mo < horizonMonths; mo++) {
     var d = new Date(startYear, startMonth + mo, 1);
     var yearLabel = d.getFullYear();
@@ -496,6 +507,38 @@ function runModel() {
       if (helocBalance < 0.01) helocBalance = 0;
       helocPaid = monthlyPayment;
       if (helocBalance === 0) helocPaid = interest + princ;
+    } else if (!actualBill && actualFin) {
+      // Finance actual, billing forecasted
+      isActual = true;
+      var deg = Math.pow(1 - degrade, yearIndex);
+      var cp = consumeProfile[calMonth - 1];
+      var sprod = solarProfile[calMonth - 1];
+      var scaledConsumed = cp.consumed;
+      monthProduction = sprod.produced * deg;
+      var days = billingDays(yearLabel, calMonth, meterDay);
+      var escFixed = Math.pow(1 + fixedEsc, yearIndex);
+      var escRate  = Math.pow(1 + rateEsc, yearIndex);
+      var dailyCons = rates.dailyCons * escFixed;
+      var dailyProd = rates.dailyProd * escFixed;
+      var consRateEsc = rates.consRate * escRate;
+      var buybackEsc  = rates.buyback * escRate;
+      var netKwh = scaledConsumed - monthProduction;
+      var subtotal;
+      if (netKwh >= 0) {
+        subtotal = days * (dailyCons + dailyProd) + netKwh * consRateEsc;
+      } else {
+        subtotal = days * (dailyCons + dailyProd) + netKwh * buybackEsc;
+      }
+      electricBill = subtotal * (1 + rates.surcharge);
+      var noSolarSub = days * (dailyCons + dailyProd) + scaledConsumed * consRateEsc;
+      estNoSolar = noSolarSub * (1 + rates.surcharge);
+      // Use actual HELOC data
+      interest = actualFin.interest;
+      var prevBal = (mo > 0 && schedule[mo - 1]) ? schedule[mo - 1].helocBalance : peakBalance;
+      helocBalance = actualFin.heloc_balance;
+      var princPaid = Math.max(0, prevBal - helocBalance);
+      if (princPaid > princOutlierThreshold) princPaid = medianPrinc;
+      helocPaid = interest + princPaid;
     } else {
       // Fully forecasted — explicit rate schedule
       isActual = false;
@@ -544,6 +587,11 @@ function runModel() {
     noSolarMonthly = estNoSolar;
     var withSolarMonthly = electricBill + (helocBalance > 0 || helocPaid > 0 ? helocPaid : 0);
 
+    // NPV & SIR: discount cash flows to present value
+    var discFactor = 1 / Math.pow(1 + discountRate / 12, mo + 1);
+    npv += (noSolarMonthly - withSolarMonthly) * discFactor;
+    pvSavings += (noSolarMonthly - electricBill) * discFactor;
+
     cumProduction += monthProduction;
     cumNoSolar += noSolarMonthly;
     cumWithSolar += withSolarMonthly;
@@ -584,7 +632,7 @@ function runModel() {
   var lifetimeLCOE = cumProduction > 0 ? cumSystemCost / cumProduction : 0;
 
   // ---- Render KPIs ----
-  renderKPIs(breakevenMonth, helocPayoffMonth, totalInterest, totalSavings, peakBalance, downPayment, horizonYears, schedule, lifetimeLCOE, cumProduction, rates.consRate);
+  renderKPIs(breakevenMonth, helocPayoffMonth, totalInterest, totalSavings, peakBalance, downPayment, horizonYears, schedule, lifetimeLCOE, cumProduction, rates.consRate, npv, pvSavings, discountRate);
 
   // ---- Render charts ----
   renderMainChart(schedule, breakevenMonth, helocPayoffMonth);
@@ -601,7 +649,7 @@ function runModel() {
 // ============================================================
 //  KPI cards
 // ============================================================
-function renderKPIs(breakevenMo, helocPayoffMo, totalInterest, totalSavings, peakBalance, downPayment, horizonYears, schedule, lifetimeLCOE, cumProduction, consRate) {
+function renderKPIs(breakevenMo, helocPayoffMo, totalInterest, totalSavings, peakBalance, downPayment, horizonYears, schedule, lifetimeLCOE, cumProduction, consRate, npv, pvSavings, discountRate) {
   var html = '';
   function kpi(val, label, cls, sub) {
     html += '<div class="kpi"><div class="val ' + (cls||'') + '">' + val + '</div><div class="lbl">' + label + '</div>';
@@ -647,6 +695,17 @@ function renderKPIs(breakevenMo, helocPayoffMo, totalInterest, totalSavings, pea
     kpi((equivRate * 100).toFixed(1) + '%', 'Equiv. Annual Return', 'good',
         '$' + fmt(netOutlay, 0) + ' net outlay');
   }
+
+  // NPV — Net Present Value at specified discount rate
+  var npvClass = npv > 0 ? 'good' : npv > -1000 ? 'warn' : 'bad';
+  kpi('$' + fmt(npv, 0), horizonYears + '-Yr NPV', npvClass,
+      fmt(discountRate * 100, 1) + '% discount rate');
+
+  // SIR — Savings-to-Investment Ratio (NREL/DOE standard)
+  var sir = netCost > 0 ? pvSavings / netCost : 0;
+  var sirClass = sir > 1 ? 'good' : sir > 0.8 ? 'warn' : 'bad';
+  kpi(fmt(sir, 2), 'Savings-to-Invest Ratio', sirClass,
+      sir > 1 ? 'PV(savings) > system cost' : 'Below breakeven');
 
   // LCOE — compare against all-in per-kWh consumption rate (energy + extra charges)
   var utilRate = consRate;

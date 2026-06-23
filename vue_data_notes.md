@@ -29,8 +29,8 @@ Each ZIP contains exactly 5 CSV files (one per timescale).
 ### CSV Structure
 - **Delimiter:** Comma
 - **Encoding:** UTF-8 (may have BOM)
-- **Timestamp column:** `Time Bucket (UTC)` — format `MM/DD/YYYY HH:MM:SS`
-- **Timezone:** UTC (Central)
+- **Timestamp column:** `Time Bucket (<local timezone>)` — format `MM/DD/YYYY HH:MM:SS`
+- **Timezone:** your local timezone (set via `SOLAR_TZ`)
 - **Values:** Decimal, may be negative (solar production shows as negative on mains)
 - **Missing CTs:** Value is literal string `No CT`
 - **Units vary by timescale:**
@@ -127,7 +127,7 @@ For solar_sync CSV ingest folder, transform VUE data into:
 timestamp_utc,source,solar_kw,grid_kw,consumption_kw,solar_top_kw,solar_bottom_kw,...circuit_columns...
 ```
 
-Convert timestamps from UTC to UTC before writing.
+Convert timestamps from your local timezone to UTC before writing.
 
 ### Future API Integration Note
 

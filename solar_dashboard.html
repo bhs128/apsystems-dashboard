@@ -61,10 +61,21 @@
   .slider-wrap input[type=range] { flex: 1; min-width: 200px; accent-color: #f59e0b; }
   .slider-time { font-family: monospace; color: #f59e0b; font-size: 1rem; font-weight: 700; min-width: 50px; }
   .section-label { font-size: 0.75rem; color: #64748b; font-style: italic; margin-bottom: 0.5rem; }
+  .nav { font-size: 0.75rem; margin-bottom: 1rem; }
+  .nav a { margin-right: 1rem; color: #38bdf8; text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 <h1>&#9728; Solar Dashboard</h1>
+<div class="nav">
+  <a href="/">Dashboard</a>
+  <a href="/clipping">Clipping</a>
+  <a href="/field">Field Log</a>
+  <a href="/roi">ROI</a>
+  <a href="/ez1">EZ1</a>
+  <a href="/vue-explorer">VUE Explorer</a>
+</div>
 <p class="subtitle" id="statusLine">Connecting ...</p>
 
 <!-- Summary cards (DB + live EMA) -->
@@ -526,7 +537,7 @@ async function loadPanelOverlay(dateVal) {
   });
 
   // --- Array orientation ---
-  var LAT = 0.00, LON = 0.00;
+  var LAT = 0.00, LON = 0.00;  // set to your site's latitude / longitude
   var tilt = 39.8, panelAz = 180, panelW = 410;
   if (arrays && arrays.length) {
     var a = arrays[0];
@@ -1322,7 +1333,7 @@ async function loadSliderDay() {
   hourIndices.sort(function(a, b) { return a.idx - b.idx; });
 
   var total = sliderTimestamps.length - 1;
-  var LAT = 0.00, LON = 0.00;
+  var LAT = 0.00, LON = 0.00;  // set to your site's latitude / longitude
   var timeLabelHtml = '';
   var elevLabelHtml = '';
   hourIndices.forEach(function(h, i) {
