@@ -410,7 +410,7 @@ def backfill_finance(db, filepath=None):
 # API sync — pull new data into DB
 # ======================================================================
 
-def sync_power_curves(db, app_id, app_secret, start=None, end=None):
+def sync_power_curves(db, app_id, app_secret, start=None, end=None, refetch=False):
     """Pull power curves from API for dates not yet in the DB."""
     today = datetime.now().strftime('%Y-%m-%d')
     end = end or today
@@ -429,8 +429,11 @@ def sync_power_curves(db, app_id, app_secret, start=None, end=None):
         print('  Power curves: up to date.')
         return
 
-    dates = [d for d in api_date_range(start, end)
-             if d not in db.get_dates_with_data('system_readings')]
+    if refetch:
+        dates = list(api_date_range(start, end))
+    else:
+        dates = [d for d in api_date_range(start, end)
+                 if d not in db.get_dates_with_data('system_readings')]
     if not dates:
         print('  Power curves: up to date.')
         return
@@ -494,7 +497,7 @@ def sync_daily_energy(db, app_id, app_secret, start=None, end=None):
         db.update_sync_log('api_daily', end, total)
 
 
-def sync_panel_data(db, app_id, app_secret, start=None, end=None, inverters=None):
+def sync_panel_data(db, app_id, app_secret, start=None, end=None, inverters=None, refetch=False):
     """Pull per-panel batch data from API for missing dates."""
     today = datetime.now().strftime('%Y-%m-%d')
     end = end or today
@@ -516,8 +519,11 @@ def sync_panel_data(db, app_id, app_secret, start=None, end=None, inverters=None
         print('  Panel data: up to date.')
         return
 
-    dates = [d for d in api_date_range(start, end)
-             if d not in db.get_dates_with_data('panel_readings')]
+    if refetch:
+        dates = list(api_date_range(start, end))
+    else:
+        dates = [d for d in api_date_range(start, end)
+                 if d not in db.get_dates_with_data('panel_readings')]
     if not dates:
         print('  Panel data: up to date.')
         return
@@ -558,7 +564,7 @@ def sync_panel_data(db, app_id, app_secret, start=None, end=None, inverters=None
         db.upsert_inverter(uid)
 
 
-def sync_inverter_telemetry(db, app_id, app_secret, start=None, end=None, inverters=None):
+def sync_inverter_telemetry(db, app_id, app_secret, start=None, end=None, inverters=None, refetch=False):
     """Pull detailed per-inverter telemetry (DC/AC power, voltage, current,
     frequency, temperature) from the single-inverter minutely endpoint."""
     today = datetime.now().strftime('%Y-%m-%d')
@@ -581,7 +587,10 @@ def sync_inverter_telemetry(db, app_id, app_secret, start=None, end=None, invert
         return
 
     existing_dates = db.get_dates_with_data('inverter_telemetry')
-    dates = [d for d in api_date_range(start, end) if d not in existing_dates]
+    if refetch:
+        dates = list(api_date_range(start, end))
+    else:
+        dates = [d for d in api_date_range(start, end) if d not in existing_dates]
     if not dates:
         print('  Inverter telemetry: up to date.')
         return
@@ -897,6 +906,9 @@ def main():
                         help='Pull new data from the EMA API')
     parser.add_argument('--status', action='store_true',
                         help='Show database contents summary')
+    parser.add_argument('--refetch', action='store_true',
+                        help='Re-pull and overwrite days already in the DB '
+                             '(use with --start/--end to repair partial days)')
     parser.add_argument('--import-billing', metavar='FILE',
                         help='Import a billing CSV file')
     parser.add_argument('--import-finance', metavar='FILE',
@@ -933,21 +945,24 @@ def main():
         # --- API sync ---
         if args.sync:
             print('\n--- API sync ---')
+            if args.refetch and not args.start:
+                print('  Note: --refetch has no effect without --start/--end '
+                      '(nothing to re-pull).')
             app_id, app_secret = load_credentials()
             print(f'  EMA API ready (App ID: {app_id[:8]}...)')
             # Fetch inverter list once for all sync steps
             inverters = pull_inverter_list(app_id, app_secret)
             print(f'  Cached {len(inverters)} inverter UIDs (1 API call)')
             sync_power_curves(db, app_id, app_secret,
-                              start=args.start, end=args.end)
+                              start=args.start, end=args.end, refetch=args.refetch)
             sync_daily_energy(db, app_id, app_secret,
                               start=args.start, end=args.end)
             sync_panel_data(db, app_id, app_secret,
                             start=args.start, end=args.end,
-                            inverters=inverters)
+                            inverters=inverters, refetch=args.refetch)
             sync_inverter_telemetry(db, app_id, app_secret,
                                     start=args.start, end=args.end,
-                                    inverters=inverters)
+                                    inverters=inverters, refetch=args.refetch)
 
             # Weather & atmospheric data (no API key needed for Open-Meteo)
             sync_weather(db)
