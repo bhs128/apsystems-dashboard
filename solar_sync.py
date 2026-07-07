@@ -892,62 +892,101 @@ def show_status(db):
     print()
 
 
-def check_gaps(db, threshold=0.85, window=10):
-    """Report missing and partial days in the per-day time-series tables.
+GAP_TABLES = (('panel_readings', 'Panel Readings'),
+              ('inverter_telemetry', 'Inverter Telemetry'))
 
-    A day is flagged 'partial' when its sample count is well below that of
-    nearby days (a season-agnostic reference), e.g. a sync captured only part
-    of the day. 'Missing' days have no rows at all within the covered range.
+
+def analyze_gaps(db, table, threshold=0.85, window=10):
+    """Return {'covered', 'count', 'missing', 'partials'} for a per-day table.
+
+    A day is 'partial' when its sample count is well below that of nearby days
+    (a season-agnostic reference); 'missing' days have no rows within the
+    covered range.
     """
-    for table, label in (('panel_readings', 'Panel Readings'),
-                         ('inverter_telemetry', 'Inverter Telemetry')):
-        df = pd.read_sql(
-            f"SELECT SUBSTR(timestamp,1,10) AS date, "
-            f"MAX(SUBSTR(timestamp,12,5)) AS last_t, "
-            f"COUNT(DISTINCT SUBSTR(timestamp,12,8)) AS intervals "
-            f"FROM {table} GROUP BY date ORDER BY date", db.conn)
+    df = pd.read_sql(
+        f"SELECT SUBSTR(timestamp,1,10) AS date, "
+        f"MAX(SUBSTR(timestamp,12,5)) AS last_t, "
+        f"COUNT(DISTINCT SUBSTR(timestamp,12,8)) AS intervals "
+        f"FROM {table} GROUP BY date ORDER BY date", db.conn)
+    if df.empty:
+        return {'covered': None, 'count': 0, 'missing': [], 'partials': []}
+    dates = df['date'].tolist()
+    last_t = df['last_t'].tolist()
+    ints = df['intervals'].tolist()
+    n = len(df)
+
+    partials = []
+    for i in range(n):
+        ref = max(ints[max(0, i - window):min(n, i + window + 1)])
+        if ref > 0 and ints[i] < threshold * ref:
+            partials.append((dates[i], last_t[i], ints[i], ref))
+
+    present = set(dates)
+    d = datetime.strptime(dates[0], '%Y-%m-%d')
+    d_end = datetime.strptime(dates[-1], '%Y-%m-%d')
+    missing = []
+    while d <= d_end:
+        ds = d.strftime('%Y-%m-%d')
+        if ds not in present:
+            missing.append(ds)
+        d += timedelta(days=1)
+
+    return {'covered': (dates[0], dates[-1]), 'count': n,
+            'missing': missing, 'partials': partials}
+
+
+def gap_dates(db):
+    """Union of missing + partial dates across the per-day tables."""
+    flagged = set()
+    for table, _ in GAP_TABLES:
+        res = analyze_gaps(db, table)
+        flagged |= set(res['missing'])
+        flagged |= {p[0] for p in res['partials']}
+    return sorted(flagged)
+
+
+def check_gaps(db):
+    """Print a missing/partial-day report for the per-day tables."""
+    for table, label in GAP_TABLES:
+        res = analyze_gaps(db, table)
         print(f'\n=== {label}: gap check ===')
-        if df.empty:
+        if not res['count']:
             print('  (no data)')
             continue
-        dates = df['date'].tolist()
-        last_t = df['last_t'].tolist()
-        ints = df['intervals'].tolist()
-        n = len(df)
-
-        # Partial days: sample count well below the nearby-day reference
-        partials = []
-        for i in range(n):
-            ref = max(ints[max(0, i - window):min(n, i + window + 1)])
-            if ref > 0 and ints[i] < threshold * ref:
-                partials.append((dates[i], last_t[i], ints[i], ref))
-
-        # Fully missing days within the covered range
-        present = set(dates)
-        d = datetime.strptime(dates[0], '%Y-%m-%d')
-        d_end = datetime.strptime(dates[-1], '%Y-%m-%d')
-        missing = []
-        while d <= d_end:
-            ds = d.strftime('%Y-%m-%d')
-            if ds not in present:
-                missing.append(ds)
-            d += timedelta(days=1)
-
-        print(f'  Covered: {dates[0]} .. {dates[-1]}  ({n} days with data)')
-        print(f'  Missing days: ' +
-              (', '.join(missing) if missing else 'none'))
-        if partials:
-            print(f'  Partial days ({len(partials)}):')
-            for ds, lt, ct, ref in partials:
+        c0, c1 = res['covered']
+        print(f'  Covered: {c0} .. {c1}  ({res["count"]} days with data)')
+        print('  Missing days: ' +
+              (', '.join(res['missing']) if res['missing'] else 'none'))
+        if res['partials']:
+            print(f'  Partial days ({len(res["partials"])}):')
+            for ds, lt, ct, ref in res['partials']:
                 print(f'    {ds}  last reading {lt}  '
                       f'{ct} samples (nearby ~{ref})')
         else:
             print('  Partial days: none')
+    flagged = gap_dates(db)
+    if flagged:
+        print(f'\n  Repair all {len(flagged)} flagged day(s) with:')
+        print('    ./venv/bin/python solar_sync.py --repair-gaps')
 
-        flagged = sorted(set(missing + [p[0] for p in partials]))
-        if flagged:
-            print(f'  Repair: ./venv/bin/python solar_sync.py --sync --refetch '
-                  f'--start {flagged[0]} --end {flagged[-1]}')
+
+def repair_gaps(db, app_id, app_secret):
+    """Re-pull only the flagged (missing/partial) days, skipping the
+    rate-limited weather/Solcast steps."""
+    flagged = gap_dates(db)
+    if not flagged:
+        print('  No missing or partial days found.')
+        return
+    inverters = pull_inverter_list(app_id, app_secret)
+    print(f'  Re-pulling {len(flagged)} day(s): {", ".join(flagged)}')
+    for ds in flagged:
+        print(f'\n  == {ds} ==')
+        sync_power_curves(db, app_id, app_secret,
+                          start=ds, end=ds, refetch=True)
+        sync_panel_data(db, app_id, app_secret, start=ds, end=ds,
+                        inverters=inverters, refetch=True)
+        sync_inverter_telemetry(db, app_id, app_secret, start=ds, end=ds,
+                                inverters=inverters, refetch=True)
 
 
 # ======================================================================
@@ -969,6 +1008,9 @@ def main():
                              '(use with --start/--end to repair partial days)')
     parser.add_argument('--check-gaps', action='store_true',
                         help='Report missing and partial days in the DB')
+    parser.add_argument('--repair-gaps', action='store_true',
+                        help='Re-pull only the missing/partial days found by '
+                             '--check-gaps (skips weather/Solcast)')
     parser.add_argument('--import-billing', metavar='FILE',
                         help='Import a billing CSV file')
     parser.add_argument('--import-finance', metavar='FILE',
@@ -979,7 +1021,7 @@ def main():
     args = parser.parse_args()
 
     if not any([args.backfill, args.sync, args.status, args.check_gaps,
-                args.import_billing, args.import_finance]):
+                args.repair_gaps, args.import_billing, args.import_finance]):
         parser.print_help()
         return
 
@@ -1033,6 +1075,13 @@ def main():
             # Show today's summary
             print('\n  System summary:')
             pull_system_summary(app_id, app_secret)
+
+        # --- Repair detected gaps ---
+        if args.repair_gaps:
+            print('\n--- Repair gaps ---')
+            app_id, app_secret = load_credentials()
+            repair_gaps(db, app_id, app_secret)
+            check_gaps(db)
 
         # --- Gap check ---
         if args.check_gaps:
