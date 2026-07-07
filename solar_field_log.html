@@ -380,6 +380,16 @@ function saveSiteConfig() {
 // ============================================================
 //  Solar position (standalone Meinel model)
 // ============================================================
+// Detect whether a calendar date falls in daylight saving time for the
+// browser's local timezone. Standard time has the larger UTC offset; DST is
+// active when the date's offset is smaller than the year's standard offset.
+function isDST(year, month, day) {
+  var jan = new Date(year, 0, 1).getTimezoneOffset();
+  var jul = new Date(year, 6, 1).getTimezoneOffset();
+  var stdOffset = Math.max(jan, jul);
+  return new Date(year, month - 1, day).getTimezoneOffset() < stdOffset;
+}
+
 function solarPosition(dateStr, localHourDecimal, lat, lon) {
   var parts = dateStr.split('-');
   var year = parseInt(parts[0]), month = parseInt(parts[1]), day = parseInt(parts[2]);
@@ -591,15 +601,20 @@ function logMeasurement() {
   var dateStr = dt.slice(0, 10);
   var timeParts = dt.slice(11).split(':');
   var localHour = parseInt(timeParts[0]) + parseInt(timeParts[1]) / 60;
+  // The solar-position model expects local *standard* time. If the wall-clock
+  // date falls in daylight saving time, shift back one hour so the computed
+  // sun elevation/azimuth line up with the actual clock reading.
+  var dParts = dateStr.split('-');
+  var solarHour = localHour - (isDST(parseInt(dParts[0]), parseInt(dParts[1]), parseInt(dParts[2])) ? 1 : 0);
 
   // Compute POA from measurement
   var poaIrr;
   if (measType === 'poa') {
     poaIrr = irr;
   } else if (measType === 'dni') {
-    poaIrr = poaFromDNI(dateStr, localHour, site.lat, site.lon, site.tilt, site.az, irr);
+    poaIrr = poaFromDNI(dateStr, solarHour, site.lat, site.lon, site.tilt, site.az, irr);
   } else {
-    poaIrr = poaFromGHI(dateStr, localHour, site.lat, site.lon, site.tilt, site.az, irr);
+    poaIrr = poaFromGHI(dateStr, solarHour, site.lat, site.lon, site.tilt, site.az, irr);
   }
 
   // Clear-sky model POA for this moment (using seasonal k)
@@ -607,19 +622,28 @@ function logMeasurement() {
                      0.714, 0.722, 0.754, 0.784, 0.821, 0.816];
   var month = parseInt(dateStr.slice(5, 7));
   var kSeasonal = monthlyK[month] || 0.76;
-  var clearsky = clearSkyPOA(dateStr, localHour, site.lat, site.lon, site.tilt, site.az, kSeasonal);
+  var clearsky = clearSkyPOA(dateStr, solarHour, site.lat, site.lon, site.tilt, site.az, kSeasonal);
 
   // Solve for effective k from measurement
   var kEff = null;
   if (clearsky.elevation > 5 && poaIrr > 50) {
-    kEff = solveKFromPOA(dateStr, localHour, site.lat, site.lon, site.tilt, site.az, poaIrr);
+    kEff = solveKFromPOA(dateStr, solarHour, site.lat, site.lon, site.tilt, site.az, poaIrr);
   }
 
   // Expected power from measured irradiance
   var expected = expectedSystemPower(site, poaIrr, isNaN(tempC) ? null : tempC, isNaN(panelTempC) ? null : panelTempC);
 
-  // Performance ratio
-  var ratio = !isNaN(powerW) && expected.systemClipped > 0 ? powerW / expected.systemClipped : null;
+  // Performance ratio.
+  // Only compare against the clipped expectation when the actual reading is
+  // itself clipping (per-panel output at/above the inverter clip limit).
+  // Otherwise compare against unclipped production.
+  var ratio = null;
+  if (!isNaN(powerW)) {
+    var perPanelActual = powerW / site.nPanels;
+    var actualClipped = perPanelActual >= site.clipW * 0.99;
+    var expectedRef = actualClipped ? expected.systemClipped : expected.systemUnclipped;
+    if (expectedRef > 0) ratio = powerW / expectedRef;
+  }
 
   var entry = {
     id: Date.now(),
