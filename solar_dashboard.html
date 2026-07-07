@@ -515,28 +515,7 @@ async function loadPanelOverlay(dateVal) {
   cols.sort();
   var nPanels = cols.length || 20;
 
-  // Panel trace datasets
-  var datasets = cols.map(function(col, i) {
-    return {
-      label: col,
-      data: data.map(function(r) { return r[col] || 0; }),
-      borderColor: panelColors[i % panelColors.length],
-      borderWidth: 1.5,
-      pointRadius: 0,
-      tension: 0.3,
-      fill: false,
-      _isPanel: true
-    };
-  });
-
-  // Mean actual per-panel power (for fit evaluation)
-  var meanActual = data.map(function(r) {
-    var sum = 0;
-    cols.forEach(function(c) { sum += (r[c] || 0); });
-    return sum / nPanels;
-  });
-
-  // --- Array orientation ---
+  // --- Array orientation & site location ---
   var LAT = SITE.lat, LON = SITE.lon;
   var tilt = 39.8, panelAz = 180, panelW = 410;
   if (arrays && arrays.length) {
@@ -544,6 +523,35 @@ async function loadPanelOverlay(dateVal) {
     if (a.tilt_deg != null) tilt = a.tilt_deg;
     if (a.azimuth_deg != null) panelAz = a.azimuth_deg;
   }
+
+  // --- Full-day time grid (sunrise to sunset from site coords) ---
+  // Base the chart's time axis on true daylight so the clear-sky models span
+  // the whole day even when inverter data stops early (storms, outages).
+  var grid = buildDayGrid(dateVal, LAT, LON, data);
+  var gridTimes = grid.times, gridHours = grid.hours, gridRows = grid.rows;
+
+  // Panel trace datasets (aligned to grid; null where no inverter reported)
+  var datasets = cols.map(function(col, i) {
+    return {
+      label: col,
+      data: gridRows.map(function(r) { return r ? (r[col] || 0) : null; }),
+      borderColor: panelColors[i % panelColors.length],
+      borderWidth: 1.5,
+      pointRadius: 0,
+      tension: 0.3,
+      fill: false,
+      spanGaps: false,
+      _isPanel: true
+    };
+  });
+
+  // Mean actual per-panel power (null where no data means excluded from fit)
+  var meanActual = gridRows.map(function(r) {
+    if (!r) return null;
+    var sum = 0;
+    cols.forEach(function(c) { sum += (r[c] || 0); });
+    return sum / nPanels;
+  });
 
   // --- NSRDB monthly k table ---
   var monthlyK = [0, 0.824, 0.816, 0.798, 0.762, 0.741, 0.734,
@@ -622,9 +630,8 @@ async function loadPanelOverlay(dateVal) {
       }
       return before ? before.v : (after ? after.v : 0);
     }
-    // Map to each data timestamp, convert system kW → per-panel W
-    return data.map(function(r) {
-      var hm = r.timestamp.slice(11, 16);
+    // Map to each grid time, convert system kW → per-panel W
+    return gridTimes.map(function(hm) {
       var tMin = toMin(hm);
       var kw = interpField('pv', tMin);
       return Math.round(kw * 1000 / nPanels);
@@ -633,13 +640,8 @@ async function loadPanelOverlay(dateVal) {
 
   // --- Build model curves ---
   var CLIP_W = 320; // DS3-S per-channel clip
-  // Precompute hours for curve building
-  var hoursArr = data.map(function(r) {
-    var hm = r.timestamp.slice(11, 16).split(':');
-    return parseInt(hm[0]) + parseInt(hm[1]) / 60;
-  });
   function meinelCurve(kVal) {
-    return hoursArr.map(function(h) {
+    return gridHours.map(function(h) {
       return Math.round(clearSkyPanelPowerK(dateVal, h, LAT, LON, tilt, panelAz, panelW, kVal));
     });
   }
@@ -708,7 +710,7 @@ async function loadPanelOverlay(dateVal) {
   var hasDaylight = meanActual.some(function(v) { return v > 10; });
   // Actual daily kWh per panel (integrate mean actual, 5-min intervals)
   var actualKwhPerPanel = 0;
-  meanActual.forEach(function(v) { actualKwhPerPanel += v; });
+  meanActual.forEach(function(v) { if (v != null) actualKwhPerPanel += v; });
   actualKwhPerPanel = actualKwhPerPanel * 5 / 60 / 1000; // W·intervals → kWh
   var actualKwhSystem = actualKwhPerPanel * nPanels;
 
@@ -719,6 +721,7 @@ async function loadPanelOverlay(dateVal) {
     for (var i = 0; i < meanActual.length; i++) {
       sunnySum += md.data[i];
       clippedSum += Math.min(md.data[i], CLIP_W);
+      if (meanActual[i] == null) continue; // no inverter data at this time
       if (meanActual[i] < 5 && md.data[i] < 5) continue; // skip night
       var err = md.data[i] - meanActual[i];
       sumSE += err * err;
@@ -809,7 +812,7 @@ async function loadPanelOverlay(dateVal) {
   panelOverlayObj = new Chart(document.getElementById('panelOverlayChart'), {
     type: 'line',
     data: {
-      labels: data.map(function(r) { return r.timestamp.slice(11, 16); }),
+      labels: gridTimes,
       datasets: datasets
     },
     options: Object.assign({}, chartOpts, {
@@ -832,6 +835,7 @@ async function loadPanelOverlay(dateVal) {
   // Store model defs and data globally so checkbox changes can rebuild
   panelOverlayObj._modelDefs = modelDefs;
   panelOverlayObj._panelData = data;
+  panelOverlayObj._gridIndexByTime = grid.idxByTime;
   panelOverlayObj._panelCols = cols;
   panelOverlayObj._dateVal = dateVal;
   panelOverlayObj._meanActual = meanActual;
@@ -855,7 +859,14 @@ document.addEventListener('change', function(e) {
 
 function updateOverlayLine() {
   if (!panelOverlayObj) return;
-  sliderLineIndex = parseInt(document.getElementById('timeSlider').value) || 0;
+  var sv = parseInt(document.getElementById('timeSlider').value) || 0;
+  var gi = sv;
+  var map = panelOverlayObj._gridIndexByTime;
+  if (map && sliderTimestamps && sliderTimestamps[sv]) {
+    var hm = sliderTimestamps[sv].slice(11, 16);
+    if (map[hm] != null) gi = map[hm];
+  }
+  sliderLineIndex = gi;
   panelOverlayObj.draw();
 }
 
@@ -1204,6 +1215,55 @@ function solarPosition(dateStr, localHour, lat, lon) {
 
 function solarElevation(dateStr, localHour, lat, lon) {
   return solarPosition(dateStr, localHour, lat, lon).elevation;
+}
+
+// Build a full-day 5-minute time grid spanning true daylight (sunrise to
+// sunset from the site coords), so clear-sky model curves cover the whole day
+// even when inverter data stops early. The grid preserves the actual data's
+// 5-minute phase so reported rows land exactly on grid slots.
+function buildDayGrid(dateStr, lat, lon, rows) {
+  // Daylight bounds: scan 5-min steps for elevation above the horizon
+  var rise = null, set = null;
+  for (var h = 0; h <= 24; h += 1 / 12) {
+    if (solarElevation(dateStr, h, lat, lon) > 0) {
+      if (rise === null) rise = h;
+      set = h;
+    }
+  }
+  if (rise === null) { rise = 6; set = 20; } // polar/degenerate fallback
+  var startTarget = Math.max(0, Math.round((rise - 0.5) * 60));
+  var endTarget = Math.min(1439, Math.round((set + 0.5) * 60));
+
+  function tsMin(ts) {
+    return parseInt(ts.slice(11, 13), 10) * 60 + parseInt(ts.slice(14, 16), 10);
+  }
+  var dataByTime = {};
+  var firstMin, lastMin;
+  if (rows && rows.length) {
+    rows.forEach(function(r) { dataByTime[r.timestamp.slice(11, 16)] = r; });
+    firstMin = tsMin(rows[0].timestamp);
+    lastMin = tsMin(rows[rows.length - 1].timestamp);
+  } else {
+    firstMin = startTarget;
+    lastMin = endTarget;
+  }
+  // Extend outward from the real data cadence to cover daylight (keeps phase)
+  var startMin = firstMin;
+  while (startMin - 5 >= startTarget) startMin -= 5;
+  var endMin = lastMin;
+  while (endMin + 5 <= endTarget) endMin += 5;
+
+  var times = [], hours = [], idxByTime = {}, gridRows = [];
+  var gi = 0;
+  for (var m = startMin; m <= endMin; m += 5) {
+    var hh = Math.floor(m / 60), mm = m % 60;
+    var hm = ('0' + hh).slice(-2) + ':' + ('0' + mm).slice(-2);
+    times.push(hm);
+    hours.push(m / 60);
+    idxByTime[hm] = gi++;
+    gridRows.push(dataByTime[hm] || null);
+  }
+  return { times: times, hours: hours, rows: gridRows, idxByTime: idxByTime };
 }
 
 // Clear-sky power for a tilted panel (W) — no inverter clipping
