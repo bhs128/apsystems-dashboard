@@ -305,6 +305,42 @@ def api_panel_wide():
     return jsonify(df_to_json(df))
 
 
+@app.route('/api/day_dump')
+def api_day_dump():
+    """Full data dump for a single day, bundling every per-day series:
+    system power, per-panel power (wide), inverter telemetry, weather,
+    Solcast (actual + forecast), and the daily energy total.
+
+    Query params:
+      date — YYYY-MM-DD (required)
+    """
+    date = request.args.get('date')
+    if not date:
+        return jsonify({'error': 'date parameter required'}), 400
+
+    panel_wide = db.get_panel_readings_wide(date)
+    if not panel_wide.empty:
+        panel_wide = panel_wide.reset_index()
+
+    daily = db.get_daily_energy(start_date=date, end_date=date)
+
+    return jsonify({
+        'date': date,
+        'daily_energy': json.loads(daily.to_json(orient='records')),
+        'system_readings': df_to_json(
+            db.get_system_readings(start_date=date, end_date=date)),
+        'panel_wide': df_to_json(panel_wide),
+        'inverter_telemetry': df_to_json(
+            db.get_inverter_telemetry(start_date=date, end_date=date)),
+        'weather_daily': df_to_json(
+            db.get_weather_daily(start_date=date, end_date=date)),
+        'solcast_actual': df_to_json(
+            db.get_solcast_estimates(start_date=date, end_date=date, est_type='actual')),
+        'solcast_forecast': df_to_json(
+            db.get_solcast_estimates(start_date=date, end_date=date, est_type='forecast')),
+    })
+
+
 @app.route('/api/billing')
 def api_billing():
     df = db.get_billing()
