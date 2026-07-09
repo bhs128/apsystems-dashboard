@@ -430,9 +430,9 @@ async function loadData() {
 
   try {
     var rows = await fetchTelemetry(date);
-    document.getElementById('loadingMsg').style.display = 'none';
 
     if (!rows || !rows.length) {
+      document.getElementById('loadingMsg').style.display = 'none';
       document.getElementById('emptyMsg').style.display = '';
       setStatus('No data for ' + date, true);
       return;
@@ -441,6 +441,12 @@ async function loadData() {
     var analysis = analyzeTelemetry(rows, clipThreshold);
     CACHE.analysis = analysis;
     CACHE.rows = rows;
+
+    // Reveal the container BEFORE building charts so each canvas is created at
+    // its final size — avoids the resize-and-grow reflow on first paint. This
+    // runs synchronously, so the intermediate "loading + section" state never
+    // paints; the browser only paints once rendering below is complete.
+    document.getElementById('summarySection').style.display = '';
 
     renderSummary(analysis);
     renderPowerProfile(analysis);
@@ -456,7 +462,7 @@ async function loadData() {
     renderTemp(analysis);
     renderRawTable(analysis);
 
-    document.getElementById('summarySection').style.display = '';
+    document.getElementById('loadingMsg').style.display = 'none';
     setStatus(rows.length + ' rows, ' + analysis.inverterUIDs.length + ' inverters', false);
   } catch(e) {
     document.getElementById('loadingMsg').style.display = 'none';
@@ -503,18 +509,6 @@ var HL_TEMP_INDEX = null;       // x-index of the vertical line on the temp char
 var TEMP_IDS_BY_TIME = {};      // "HH:MM" -> [reading ids]
 var HL_CHARTS = ['ivCurve', 'vvsP', 'ivsP', 'vivsP'];
 
-function isHL(d) { return d && d.id != null && HL_SET && HL_SET.has(d.id); }
-
-function hlRadius(base) {
-  return function(ctx) { return isHL(ctx.raw) ? base + 5 : base; };
-}
-function hlBorderColor(orig) {
-  return function(ctx) { return isHL(ctx.raw) ? '#ffffff' : orig; };
-}
-function hlBorderWidth(base) {
-  return function(ctx) { return isHL(ctx.raw) ? 3 : base; };
-}
-
 function sameSet(a, b) {
   if (a === b) return true;
   if (!a || !b || a.size !== b.size) return false;
@@ -526,7 +520,9 @@ function sameSet(a, b) {
 function applyScatterHighlight(newSet) {
   if (sameSet(newSet, HL_SET)) return;
   HL_SET = newSet;
-  HL_CHARTS.forEach(function(k) { if (CHARTS[k]) CHARTS[k].update('none'); });
+  // render() just redraws (points + overlay); it does NOT re-fit axes, so the
+  // scale stays put and there's no re-parse cost like update() incurs.
+  HL_CHARTS.forEach(function(k) { if (CHARTS[k]) CHARTS[k].render(); });
 }
 
 function crossHighlightHover(evt, elements, chart) {
@@ -536,7 +532,7 @@ function crossHighlightHover(evt, elements, chart) {
     var pt = chart.data.datasets[el.datasetIndex].data[el.index];
     if (pt && pt.id != null) newSet = new Set([pt.id]);
   }
-  if (HL_TEMP_INDEX !== null) { HL_TEMP_INDEX = null; if (CHARTS.temp) CHARTS.temp.update('none'); }
+  if (HL_TEMP_INDEX !== null) { HL_TEMP_INDEX = null; if (CHARTS.temp) CHARTS.temp.render(); }
   applyScatterHighlight(newSet);
 }
 
@@ -548,12 +544,61 @@ function tempHover(evt, elements, chart) {
     var ids = TEMP_IDS_BY_TIME[t];
     if (ids && ids.length) newSet = new Set(ids);
   }
-  if (idx !== HL_TEMP_INDEX) { HL_TEMP_INDEX = idx; chart.update('none'); }
+  if (idx !== HL_TEMP_INDEX) { HL_TEMP_INDEX = idx; chart.render(); }
   applyScatterHighlight(newSet);
 }
 
+// Draws fixed-size highlight rings over the currently highlighted scatter points.
+// Rendering as an overlay keeps the point radii (and therefore the axes) constant.
+var highlightRingPlugin = {
+  id: 'highlightRing',
+  afterDatasetsDraw: function(chart) {
+    if (!HL_SET || !HL_SET.size) return;
+    var ctx = chart.ctx, area = chart.chartArea;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(area.left, area.top, area.right - area.left, area.bottom - area.top);
+    ctx.clip();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#ffffff';
+    chart.data.datasets.forEach(function(ds, di) {
+      var data = ds.data;
+      if (!data || !data.length || data[0] == null || data[0].id == null) return;
+      var meta = chart.getDatasetMeta(di);
+      for (var i = 0; i < data.length; i++) {
+        var d = data[i];
+        if (!d || !HL_SET.has(d.id)) continue;
+        var el = meta.data[i];
+        if (!el) continue;
+        ctx.beginPath();
+        ctx.arc(el.x, el.y, 5.5, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+    });
+    ctx.restore();
+  }
+};
+
 // Draws the vertical time marker on the temperature chart.
 var vlineTempPlugin = {
+  id: 'vlineTemp',
+  afterDatasetsDraw: function(chart) {
+    if (HL_TEMP_INDEX == null) return;
+    var x = chart.scales.x.getPixelForValue(HL_TEMP_INDEX);
+    if (x == null || isNaN(x)) return;
+    var y = chart.scales.y, ctx = chart.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.setLineDash([4, 3]);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(226,232,240,0.7)';
+    ctx.moveTo(x, y.top);
+    ctx.lineTo(x, y.bottom);
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+
   id: 'vlineTemp',
   afterDatasetsDraw: function(chart) {
     if (HL_TEMP_INDEX == null) return;
@@ -804,12 +849,12 @@ function renderIVCurve(a) {
       datasets: [{
         label: 'Operating point',
         data: pts.map(function(r) { return { x: r.i, y: r.v, t: r.temp, id: r.id }; }),
-        pointRadius: hlRadius(2.5),
+        pointRadius: 2.5,
         backgroundColor: pts.map(function(r) { return tempColor((r.temp - tMin) / span); }),
-        borderColor: hlBorderColor('rgba(0,0,0,0)'),
-        borderWidth: hlBorderWidth(0)
+        borderWidth: 0
       }]
     },
+    plugins: [highlightRingPlugin],
     options: Object.assign({}, noLegend, { animation: false, onHover: crossHighlightHover,
       plugins: { legend: { display: false }, tooltip: { callbacks: {
         label: function(ctx) {
@@ -837,15 +882,16 @@ function renderVvsP(a) {
         {
           label: 'Normal',
           data: pts.filter(function(r) { return !r.clipping; }).map(function(r) { return { x: r.v, y: r.p, id: r.id }; }),
-          backgroundColor: BLUE + '44', borderColor: hlBorderColor(BLUE), borderWidth: hlBorderWidth(1), pointRadius: hlRadius(2.5)
+          backgroundColor: BLUE + '44', borderColor: BLUE, pointRadius: 2.5
         },
         {
           label: 'Clipping',
           data: pts.filter(function(r) { return r.clipping; }).map(function(r) { return { x: r.v, y: r.p, id: r.id }; }),
-          backgroundColor: RED + '88', borderColor: hlBorderColor(RED), borderWidth: hlBorderWidth(1), pointRadius: hlRadius(3)
+          backgroundColor: RED + '88', borderColor: RED, pointRadius: 3
         }
       ]
     },
+    plugins: [highlightRingPlugin],
     options: Object.assign({}, smallLegend, { animation: false, onHover: crossHighlightHover,
       scales: {
         x: Object.assign({}, axisStyle, { title: { display: true, text: 'DC Voltage (V)', color: '#64748b' } }),
@@ -866,15 +912,16 @@ function renderIvsP(a) {
         {
           label: 'Normal',
           data: pts.filter(function(r) { return !r.clipping; }).map(function(r) { return { x: r.i, y: r.p, id: r.id }; }),
-          backgroundColor: BLUE + '44', borderColor: hlBorderColor(BLUE), borderWidth: hlBorderWidth(1), pointRadius: hlRadius(2.5)
+          backgroundColor: BLUE + '44', borderColor: BLUE, pointRadius: 2.5
         },
         {
           label: 'Clipping',
           data: pts.filter(function(r) { return r.clipping; }).map(function(r) { return { x: r.i, y: r.p, id: r.id }; }),
-          backgroundColor: RED + '88', borderColor: hlBorderColor(RED), borderWidth: hlBorderWidth(1), pointRadius: hlRadius(3)
+          backgroundColor: RED + '88', borderColor: RED, pointRadius: 3
         }
       ]
     },
+    plugins: [highlightRingPlugin],
     options: Object.assign({}, smallLegend, { animation: false, onHover: crossHighlightHover,
       scales: {
         x: Object.assign({}, axisStyle, { title: { display: true, text: 'DC Current (A)', color: '#64748b' } }),
@@ -895,12 +942,12 @@ function renderVIvsP(a) {
         {
           label: 'Normal',
           data: pts.filter(function(r) { return !r.clipping; }).map(function(r) { return { x: r.p, y: r.vi, id: r.id }; }),
-          backgroundColor: BLUE + '44', borderColor: hlBorderColor(BLUE), borderWidth: hlBorderWidth(1), pointRadius: hlRadius(2.5)
+          backgroundColor: BLUE + '44', borderColor: BLUE, pointRadius: 2.5
         },
         {
           label: 'Clipping',
           data: pts.filter(function(r) { return r.clipping; }).map(function(r) { return { x: r.p, y: r.vi, id: r.id }; }),
-          backgroundColor: RED + '88', borderColor: hlBorderColor(RED), borderWidth: hlBorderWidth(1), pointRadius: hlRadius(3)
+          backgroundColor: RED + '88', borderColor: RED, pointRadius: 3
         },
         {
           label: '1:1 line',
@@ -910,6 +957,7 @@ function renderVIvsP(a) {
         }
       ]
     },
+    plugins: [highlightRingPlugin],
     options: Object.assign({}, smallLegend, { animation: false, onHover: crossHighlightHover,
       scales: {
         x: Object.assign({}, axisStyle, { title: { display: true, text: 'Reported DC Power (W)', color: '#64748b' } }),
@@ -1018,6 +1066,15 @@ function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(function(c) {
     c.classList.toggle('active', c.id === 'tab-' + name);
   });
+  // Charts built while their tab was hidden were sized to 0; resize now that the
+  // tab is visible so they snap to full size (animation is off, so no grow).
+  var tabCharts = {
+    overview: ['powerProfile', 'histogram', 'clipLoss', 'clipCount'],
+    channels: ['channelCurves'],
+    iv: ['ivCurve', 'vvsP', 'ivsP', 'vivsP', 'temp'],
+    table: []
+  };
+  (tabCharts[name] || []).forEach(function(k) { if (CHARTS[k]) CHARTS[k].resize(); });
 }
 
 // ============================================================
