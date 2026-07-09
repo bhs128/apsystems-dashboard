@@ -398,6 +398,7 @@ function analyzeTelemetry(rows, clipThreshold) {
       });
     }
   });
+  allReadings.forEach(function(r, idx) { r.id = idx; });
 
   return {
     timestamps: timestamps,
@@ -491,6 +492,86 @@ var AMBER = '#f59e0b', RED = '#ef4444', GREEN = '#22c55e', BLUE = '#38bdf8', PUR
 function destroyChart(key) {
   if (CHARTS[key]) { CHARTS[key].destroy(); CHARTS[key] = null; }
 }
+
+// ---- Cross-chart hover highlight (Voltage/Current scatter charts) ----
+// Each reading carries a stable `id`. Hovering a point on a scatter chart
+// highlights the same id on the other scatter charts. Hovering the temperature
+// chart draws a vertical line at that time and highlights every reading (all
+// channels) recorded at that timestamp on all scatter charts.
+var HL_SET = null;              // Set of highlighted reading ids
+var HL_TEMP_INDEX = null;       // x-index of the vertical line on the temp chart
+var TEMP_IDS_BY_TIME = {};      // "HH:MM" -> [reading ids]
+var HL_CHARTS = ['ivCurve', 'vvsP', 'ivsP', 'vivsP'];
+
+function isHL(d) { return d && d.id != null && HL_SET && HL_SET.has(d.id); }
+
+function hlRadius(base) {
+  return function(ctx) { return isHL(ctx.raw) ? base + 5 : base; };
+}
+function hlBorderColor(orig) {
+  return function(ctx) { return isHL(ctx.raw) ? '#ffffff' : orig; };
+}
+function hlBorderWidth(base) {
+  return function(ctx) { return isHL(ctx.raw) ? 3 : base; };
+}
+
+function sameSet(a, b) {
+  if (a === b) return true;
+  if (!a || !b || a.size !== b.size) return false;
+  var same = true;
+  a.forEach(function(v) { if (!b.has(v)) same = false; });
+  return same;
+}
+
+function applyScatterHighlight(newSet) {
+  if (sameSet(newSet, HL_SET)) return;
+  HL_SET = newSet;
+  HL_CHARTS.forEach(function(k) { if (CHARTS[k]) CHARTS[k].update('none'); });
+}
+
+function crossHighlightHover(evt, elements, chart) {
+  var newSet = null;
+  if (elements && elements.length) {
+    var el = elements[0];
+    var pt = chart.data.datasets[el.datasetIndex].data[el.index];
+    if (pt && pt.id != null) newSet = new Set([pt.id]);
+  }
+  if (HL_TEMP_INDEX !== null) { HL_TEMP_INDEX = null; if (CHARTS.temp) CHARTS.temp.update('none'); }
+  applyScatterHighlight(newSet);
+}
+
+function tempHover(evt, elements, chart) {
+  var newSet = null, idx = null;
+  if (elements && elements.length) {
+    idx = elements[0].index;
+    var t = chart.data.labels[idx];
+    var ids = TEMP_IDS_BY_TIME[t];
+    if (ids && ids.length) newSet = new Set(ids);
+  }
+  if (idx !== HL_TEMP_INDEX) { HL_TEMP_INDEX = idx; chart.update('none'); }
+  applyScatterHighlight(newSet);
+}
+
+// Draws the vertical time marker on the temperature chart.
+var vlineTempPlugin = {
+  id: 'vlineTemp',
+  afterDatasetsDraw: function(chart) {
+    if (HL_TEMP_INDEX == null) return;
+    var x = chart.scales.x.getPixelForValue(HL_TEMP_INDEX);
+    if (x == null || isNaN(x)) return;
+    var y = chart.scales.y, ctx = chart.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.setLineDash([4, 3]);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(226,232,240,0.7)';
+    ctx.moveTo(x, y.top);
+    ctx.lineTo(x, y.bottom);
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+
 
 // --- System Power Profile ---
 function renderPowerProfile(a) {
@@ -722,13 +803,14 @@ function renderIVCurve(a) {
     data: {
       datasets: [{
         label: 'Operating point',
-        data: pts.map(function(r) { return { x: r.i, y: r.v, t: r.temp }; }),
-        pointRadius: 2.5,
+        data: pts.map(function(r) { return { x: r.i, y: r.v, t: r.temp, id: r.id }; }),
+        pointRadius: hlRadius(2.5),
         backgroundColor: pts.map(function(r) { return tempColor((r.temp - tMin) / span); }),
-        borderWidth: 0
+        borderColor: hlBorderColor('rgba(0,0,0,0)'),
+        borderWidth: hlBorderWidth(0)
       }]
     },
-    options: Object.assign({}, noLegend, { animation: false,
+    options: Object.assign({}, noLegend, { animation: false, onHover: crossHighlightHover,
       plugins: { legend: { display: false }, tooltip: { callbacks: {
         label: function(ctx) {
           var d = ctx.raw;
@@ -754,17 +836,17 @@ function renderVvsP(a) {
       datasets: [
         {
           label: 'Normal',
-          data: pts.filter(function(r) { return !r.clipping; }).map(function(r) { return { x: r.v, y: r.p }; }),
-          backgroundColor: BLUE + '44', borderColor: BLUE, pointRadius: 2.5
+          data: pts.filter(function(r) { return !r.clipping; }).map(function(r) { return { x: r.v, y: r.p, id: r.id }; }),
+          backgroundColor: BLUE + '44', borderColor: hlBorderColor(BLUE), borderWidth: hlBorderWidth(1), pointRadius: hlRadius(2.5)
         },
         {
           label: 'Clipping',
-          data: pts.filter(function(r) { return r.clipping; }).map(function(r) { return { x: r.v, y: r.p }; }),
-          backgroundColor: RED + '88', borderColor: RED, pointRadius: 3
+          data: pts.filter(function(r) { return r.clipping; }).map(function(r) { return { x: r.v, y: r.p, id: r.id }; }),
+          backgroundColor: RED + '88', borderColor: hlBorderColor(RED), borderWidth: hlBorderWidth(1), pointRadius: hlRadius(3)
         }
       ]
     },
-    options: Object.assign({}, smallLegend, { animation: false,
+    options: Object.assign({}, smallLegend, { animation: false, onHover: crossHighlightHover,
       scales: {
         x: Object.assign({}, axisStyle, { title: { display: true, text: 'DC Voltage (V)', color: '#64748b' } }),
         y: Object.assign({}, axisStyle, { title: { display: true, text: 'DC Power (W)', color: '#64748b' } })
@@ -783,17 +865,17 @@ function renderIvsP(a) {
       datasets: [
         {
           label: 'Normal',
-          data: pts.filter(function(r) { return !r.clipping; }).map(function(r) { return { x: r.i, y: r.p }; }),
-          backgroundColor: BLUE + '44', borderColor: BLUE, pointRadius: 2.5
+          data: pts.filter(function(r) { return !r.clipping; }).map(function(r) { return { x: r.i, y: r.p, id: r.id }; }),
+          backgroundColor: BLUE + '44', borderColor: hlBorderColor(BLUE), borderWidth: hlBorderWidth(1), pointRadius: hlRadius(2.5)
         },
         {
           label: 'Clipping',
-          data: pts.filter(function(r) { return r.clipping; }).map(function(r) { return { x: r.i, y: r.p }; }),
-          backgroundColor: RED + '88', borderColor: RED, pointRadius: 3
+          data: pts.filter(function(r) { return r.clipping; }).map(function(r) { return { x: r.i, y: r.p, id: r.id }; }),
+          backgroundColor: RED + '88', borderColor: hlBorderColor(RED), borderWidth: hlBorderWidth(1), pointRadius: hlRadius(3)
         }
       ]
     },
-    options: Object.assign({}, smallLegend, { animation: false,
+    options: Object.assign({}, smallLegend, { animation: false, onHover: crossHighlightHover,
       scales: {
         x: Object.assign({}, axisStyle, { title: { display: true, text: 'DC Current (A)', color: '#64748b' } }),
         y: Object.assign({}, axisStyle, { title: { display: true, text: 'DC Power (W)', color: '#64748b' } })
@@ -812,13 +894,13 @@ function renderVIvsP(a) {
       datasets: [
         {
           label: 'Normal',
-          data: pts.filter(function(r) { return !r.clipping; }).map(function(r) { return { x: r.p, y: r.vi }; }),
-          backgroundColor: BLUE + '44', borderColor: BLUE, pointRadius: 2.5
+          data: pts.filter(function(r) { return !r.clipping; }).map(function(r) { return { x: r.p, y: r.vi, id: r.id }; }),
+          backgroundColor: BLUE + '44', borderColor: hlBorderColor(BLUE), borderWidth: hlBorderWidth(1), pointRadius: hlRadius(2.5)
         },
         {
           label: 'Clipping',
-          data: pts.filter(function(r) { return r.clipping; }).map(function(r) { return { x: r.p, y: r.vi }; }),
-          backgroundColor: RED + '88', borderColor: RED, pointRadius: 3
+          data: pts.filter(function(r) { return r.clipping; }).map(function(r) { return { x: r.p, y: r.vi, id: r.id }; }),
+          backgroundColor: RED + '88', borderColor: hlBorderColor(RED), borderWidth: hlBorderWidth(1), pointRadius: hlRadius(3)
         },
         {
           label: '1:1 line',
@@ -828,7 +910,7 @@ function renderVIvsP(a) {
         }
       ]
     },
-    options: Object.assign({}, smallLegend, { animation: false,
+    options: Object.assign({}, smallLegend, { animation: false, onHover: crossHighlightHover,
       scales: {
         x: Object.assign({}, axisStyle, { title: { display: true, text: 'Reported DC Power (W)', color: '#64748b' } }),
         y: Object.assign({}, axisStyle, { title: { display: true, text: 'V×I Product (W)', color: '#64748b' } })
@@ -840,6 +922,14 @@ function renderVIvsP(a) {
 // --- Temperature ---
 function renderTemp(a) {
   destroyChart('temp');
+  // Map each time bucket to the reading ids at that timestamp (for cross-highlight)
+  var idsByTime = {};
+  a.allReadings.forEach(function(r) {
+    var t = r.ts.slice(11, 16);
+    (idsByTime[t] = idsByTime[t] || []).push(r.id);
+  });
+  TEMP_IDS_BY_TIME = idsByTime;
+  HL_TEMP_INDEX = null;
   // One line per inverter
   var byUID = {};
   var rows = CACHE.rows;
@@ -861,7 +951,9 @@ function renderTemp(a) {
   CHARTS.temp = new Chart(document.getElementById('chartTemp'), {
     type: 'line',
     data: { labels: times, datasets: datasets },
-    options: Object.assign({}, smallLegend, { animation: false,
+    plugins: [vlineTempPlugin],
+    options: Object.assign({}, smallLegend, { animation: false, onHover: tempHover,
+      interaction: { mode: 'index', intersect: false },
       scales: {
         x: Object.assign({}, axisStyle, { ticks: { maxTicksLimit: 12 } }),
         y: Object.assign({}, axisStyle, { title: { display: true, text: '°C', color: '#64748b' } })
