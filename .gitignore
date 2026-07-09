@@ -24,6 +24,11 @@ temp_vue_data/
 *.bak
 !requirements.txt
 
+# Vue Explorer (excluded from repo)
+vue_data_explorer.html
+vue_ingest.py
+vue_data_notes.md
+
 # Zone.Identifier files (Windows metadata)
 *:Zone.Identifier
 

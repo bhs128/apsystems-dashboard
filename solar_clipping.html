@@ -68,7 +68,6 @@
   <a href="/field">Field Log</a>
   <a href="/roi">ROI</a>
   <a href="/ez1">EZ1</a>
-  <a href="/vue-explorer">VUE Explorer</a>
 </div>
 <p class="subtitle">DS3-S per-channel DC telemetry &mdash; quantify power lost to inverter clipping (320W/ch)</p>
 
@@ -198,6 +197,17 @@
 
   <!-- Tab 3: Voltage/Current Analysis -->
   <div class="box tab-content" id="tab-iv" style="border-radius: 0 0.75rem 0.75rem 0.75rem">
+    <div style="margin-bottom:1rem">
+      <h3>I&ndash;V Curve (colored by inverter temp)</h3>
+      <p class="help">Operating points of every channel: DC current vs DC voltage. Dot color uses inverter temperature as a proxy for module temperature &mdash; warmer modules sit at lower voltage.</p>
+      <div id="ivCurveLegend" style="display:flex;align-items:center;gap:0.5rem;font-size:0.7rem;color:#94a3b8;margin:0.3rem 0 0.5rem">
+        <span>Cooler</span>
+        <span style="display:inline-block;width:140px;height:10px;border-radius:5px;background:linear-gradient(to right,hsl(220,80%,55%),hsl(140,75%,50%),hsl(50,90%,55%),hsl(0,80%,55%))"></span>
+        <span>Warmer</span>
+        <span id="ivCurveRange" style="margin-left:0.5rem;color:#64748b"></span>
+      </div>
+      <canvas id="chartIVCurve"></canvas>
+    </div>
     <div class="row">
       <div>
         <h3>DC Voltage vs DC Power</h3>
@@ -438,6 +448,7 @@ async function loadData() {
     renderClipCount(analysis);
     renderInverterTable(analysis);
     renderChannelCurves(analysis);
+    renderIVCurve(analysis);
     renderVvsP(analysis);
     renderIvsP(analysis);
     renderVIvsP(analysis);
@@ -675,6 +686,58 @@ function renderChannelCurves(a) {
       scales: {
         x: Object.assign({}, axisStyle, { ticks: { maxTicksLimit: 12 } }),
         y: Object.assign({}, axisStyle, { title: { display: true, text: 'DC Power (W)', color: '#64748b' } })
+      }
+    })
+  });
+}
+
+// --- I-V curve colored by inverter temp ---
+function tempColor(frac) {
+  // frac 0 (cool) -> blue, 1 (hot) -> red, through green/amber
+  var hue = 220 - 220 * Math.max(0, Math.min(1, frac));
+  return 'hsl(' + hue.toFixed(0) + ',80%,55%)';
+}
+
+function renderIVCurve(a) {
+  destroyChart('ivCurve');
+  // Only readings that have a valid temperature and non-zero operating point
+  var pts = a.allReadings.filter(function(r) {
+    return r.temp != null && !isNaN(r.temp) && r.v > 0 && r.i > 0;
+  });
+
+  var rangeEl = document.getElementById('ivCurveRange');
+  if (!pts.length) {
+    if (rangeEl) rangeEl.textContent = '(no temperature data)';
+    return;
+  }
+
+  var temps = pts.map(function(r) { return r.temp; });
+  var tMin = Math.min.apply(null, temps);
+  var tMax = Math.max.apply(null, temps);
+  var span = tMax - tMin || 1;
+  if (rangeEl) rangeEl.textContent = tMin.toFixed(1) + '\u00b0C \u2013 ' + tMax.toFixed(1) + '\u00b0C';
+
+  CHARTS.ivCurve = new Chart(document.getElementById('chartIVCurve'), {
+    type: 'scatter',
+    data: {
+      datasets: [{
+        label: 'Operating point',
+        data: pts.map(function(r) { return { x: r.i, y: r.v, t: r.temp }; }),
+        pointRadius: 2.5,
+        backgroundColor: pts.map(function(r) { return tempColor((r.temp - tMin) / span); }),
+        borderWidth: 0
+      }]
+    },
+    options: Object.assign({}, noLegend, { animation: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: {
+        label: function(ctx) {
+          var d = ctx.raw;
+          return d.x.toFixed(1) + ' A, ' + d.y.toFixed(1) + ' V, ' + d.t.toFixed(1) + '\u00b0C';
+        }
+      } } },
+      scales: {
+        x: Object.assign({}, axisStyle, { title: { display: true, text: 'DC Current (A)', color: '#64748b' } }),
+        y: Object.assign({}, axisStyle, { title: { display: true, text: 'DC Voltage (V)', color: '#64748b' } })
       }
     })
   });

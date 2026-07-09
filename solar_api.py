@@ -83,10 +83,6 @@ def clipping_analysis():
 def roi_page():
     return send_from_directory(SERVICE_DIR, 'solar_roi.html')
 
-@app.route('/vue-explorer')
-def vue_explorer_page():
-    return send_from_directory(SERVICE_DIR, 'vue_data_explorer.html')
-
 @app.route('/battery')
 def battery_page():
     return send_from_directory(SERVICE_DIR, 'battery_sim.html')
