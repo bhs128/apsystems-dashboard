@@ -599,24 +599,6 @@ var vlineTempPlugin = {
   }
 };
 
-  id: 'vlineTemp',
-  afterDatasetsDraw: function(chart) {
-    if (HL_TEMP_INDEX == null) return;
-    var x = chart.scales.x.getPixelForValue(HL_TEMP_INDEX);
-    if (x == null || isNaN(x)) return;
-    var y = chart.scales.y, ctx = chart.ctx;
-    ctx.save();
-    ctx.beginPath();
-    ctx.setLineDash([4, 3]);
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = 'rgba(226,232,240,0.7)';
-    ctx.moveTo(x, y.top);
-    ctx.lineTo(x, y.bottom);
-    ctx.stroke();
-    ctx.restore();
-  }
-};
-
 
 // --- System Power Profile ---
 function renderPowerProfile(a) {
