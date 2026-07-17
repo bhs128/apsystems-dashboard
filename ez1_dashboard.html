@@ -102,7 +102,7 @@
 var todayChartObj = null, dailyChartObj = null, channelChartObj = null;
 var todayReadings = null;      // cached readings for the current day
 var detailDate = null;         // non-null when viewing a historical day's detail
-var siteLat = null, siteLon = null;   // filled from /api/config
+var siteLat = null, siteLon = null, siteTz = null;   // filled from /api/config
 
 function fmt(n, d) { return n.toLocaleString('en-US', {minimumFractionDigits: d, maximumFractionDigits: d}); }
 
@@ -153,7 +153,26 @@ async function loadConfig() {
     var c = await fetchJSON('/api/config');
     siteLat = (typeof c.lat === 'number') ? c.lat : null;
     siteLon = (typeof c.lon === 'number') ? c.lon : null;
+    siteTz = (c.timezone && c.timezone !== 'auto') ? c.timezone : null;
   } catch (e) { /* fall back to auto-scaled axis */ }
+}
+
+// Convert an absolute instant to a "faux-local" Date whose browser-local
+// fields equal the wall-clock time at the panel site (siteTz). This matches how
+// the naive reading timestamps render, so the axis stays anchored to where the
+// sun is actually shining, regardless of the viewer's timezone.
+function toSiteWallClock(date, tz) {
+  if (!tz) return date;
+  var parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  }).formatToParts(date);
+  var m = {};
+  parts.forEach(function(p) { m[p.type] = p.value; });
+  var hour = (m.hour === '24') ? 0 : parseInt(m.hour, 10);
+  return new Date(parseInt(m.year, 10), parseInt(m.month, 10) - 1, parseInt(m.day, 10),
+                  hour, parseInt(m.minute, 10), parseInt(m.second, 10));
 }
 
 async function init() {
@@ -258,8 +277,11 @@ function renderTodayChart(readings) {
     var dayStr = readings[0].timestamp.slice(0, 10);
     var st = sunTimes(new Date(dayStr + 'T12:00:00'), siteLat, siteLon);
     if (st) {
-      xMin = new Date(st.sunrise.getTime() - 1800000);
-      xMax = new Date(st.sunset.getTime() + 1800000);
+      // Anchor bounds to the site's wall-clock so they line up with readings.
+      var rise = toSiteWallClock(st.sunrise, siteTz);
+      var set = toSiteWallClock(st.sunset, siteTz);
+      xMin = new Date(rise.getTime() - 1800000);
+      xMax = new Date(set.getTime() + 1800000);
     }
   }
 
