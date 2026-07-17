@@ -202,19 +202,24 @@ function renderTodayChart(readings) {
 
   var axStyle = { ticks: { color: '#64748b', font: { size: 8 } }, grid: { color: '#1e293b' } };
 
+  // The logger polls every 60s; break the line rather than joining across any
+  // gap wider than this (a period where the EZ1 was unreachable). spanGaps as a
+  // number is a built-in Chart.js feature — no gap-detection code required.
+  var MAX_GAP_MS = 150000;
+
   todayChartObj = new Chart(document.getElementById('todayChart'), {
     type: 'line',
     data: {
       datasets: [
         { label: 'Total', data: total,
           borderColor: '#f59e0b', borderWidth: 2, pointRadius: 0,
-          fill: true, backgroundColor: '#f59e0b18', tension: 0.3 },
+          fill: true, backgroundColor: '#f59e0b18', tension: 0.3, spanGaps: MAX_GAP_MS },
         { label: 'Ch 1', data: ch1,
           borderColor: '#22c55e', borderWidth: 1.5, pointRadius: 0, borderDash: [4, 2],
-          fill: false, tension: 0.3 },
+          fill: false, tension: 0.3, spanGaps: MAX_GAP_MS },
         { label: 'Ch 2', data: ch2,
           borderColor: '#38bdf8', borderWidth: 1.5, pointRadius: 0, borderDash: [4, 2],
-          fill: false, tension: 0.3 }
+          fill: false, tension: 0.3, spanGaps: MAX_GAP_MS }
       ]
     },
     options: {
