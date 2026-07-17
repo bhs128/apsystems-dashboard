@@ -135,14 +135,30 @@ def api_ez1_live():
 
 @app.route('/api/ez1/today')
 def api_ez1_today():
-    """All readings for today (power curve)."""
+    """All readings for a single day (power curve).
+
+    Optional ?date=YYYY-MM-DD selects a specific day; defaults to today.
+    """
     conn = _ez1_db()
     if not conn:
         return jsonify([]), 404
-    rows = conn.execute(
-        'SELECT timestamp, p1, p2, e1, e2, te1, te2 FROM ez1_readings'
-        ' WHERE timestamp LIKE date("now", "localtime") || "%"'
-        ' ORDER BY timestamp').fetchall()
+    day = request.args.get('date')
+    if day:
+        # Validate to a strict YYYY-MM-DD to avoid injection / bad input.
+        from datetime import datetime as _dt
+        try:
+            day = _dt.strptime(day, '%Y-%m-%d').strftime('%Y-%m-%d')
+        except ValueError:
+            return jsonify({'error': 'invalid date'}), 400
+        rows = conn.execute(
+            'SELECT timestamp, p1, p2, e1, e2, te1, te2 FROM ez1_readings'
+            ' WHERE timestamp LIKE ? || "%"'
+            ' ORDER BY timestamp', (day,)).fetchall()
+    else:
+        rows = conn.execute(
+            'SELECT timestamp, p1, p2, e1, e2, te1, te2 FROM ez1_readings'
+            ' WHERE timestamp LIKE date("now", "localtime") || "%"'
+            ' ORDER BY timestamp').fetchall()
     conn.close()
     return jsonify([{'timestamp': r[0], 'p1': r[1], 'p2': r[2],
                      'e1': r[3], 'e2': r[4], 'te1': r[5], 'te2': r[6]}

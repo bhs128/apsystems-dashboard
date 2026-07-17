@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EZ1 Side Panels</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -64,13 +65,13 @@
 
 <!-- Today's power curve -->
 <div class="box">
-  <h3>Today's Power Curve</h3>
+  <h3 id="todayTitle">Today's Power Curve <a href="#" id="todayReset" style="display:none; font-size:0.7rem; font-weight:400;">&larr; back to today</a></h3>
   <div class="chart-wrap"><canvas id="todayChart"></canvas></div>
 </div>
 
 <!-- Daily production history -->
 <div class="box">
-  <h3>Daily Production History</h3>
+  <h3>Daily Production History <span class="help" style="font-weight:400;">(click a bar for detail)</span></h3>
   <div class="chart-wrap"><canvas id="dailyChart"></canvas></div>
 </div>
 
@@ -99,8 +100,12 @@
 
 <script>
 var todayChartObj = null, dailyChartObj = null, channelChartObj = null;
+var todayReadings = null;      // cached readings for the current day
+var detailDate = null;         // non-null when viewing a historical day's detail
 
 function fmt(n, d) { return n.toLocaleString('en-US', {minimumFractionDigits: d, maximumFractionDigits: d}); }
+
+function parseTs(ts) { return new Date(ts.replace(' ', 'T')); }
 
 async function fetchJSON(url) {
   var r = await fetch(url);
@@ -121,8 +126,9 @@ async function init() {
     var daily = results[2];
     var device = results[3];
 
+    todayReadings = today;
     renderKPIs(live, daily, device);
-    renderTodayChart(today);
+    if (!detailDate) renderTodayChart(today);   // keep detail view across refreshes
     renderDailyChart(daily);
     renderChannelChart(today);
     renderDailyTable(daily);
@@ -187,21 +193,26 @@ function renderTodayChart(readings) {
   if (todayChartObj) todayChartObj.destroy();
   if (!readings || readings.length === 0) return;
 
-  var labels = readings.map(function(r) { return r.timestamp.slice(11, 16); });
+  // Plot against a real date-time axis so points sit at their true position in
+  // time. Missing polls (when the logger couldn't reach the EZ1) show up as
+  // honest gaps in the curve without any gap-detection logic.
+  var total = readings.map(function(r) { return { x: parseTs(r.timestamp), y: r.p1 + r.p2 }; });
+  var ch1 = readings.map(function(r) { return { x: parseTs(r.timestamp), y: r.p1 }; });
+  var ch2 = readings.map(function(r) { return { x: parseTs(r.timestamp), y: r.p2 }; });
+
   var axStyle = { ticks: { color: '#64748b', font: { size: 8 } }, grid: { color: '#1e293b' } };
 
   todayChartObj = new Chart(document.getElementById('todayChart'), {
     type: 'line',
     data: {
-      labels: labels,
       datasets: [
-        { label: 'Total', data: readings.map(function(r) { return r.p1 + r.p2; }),
+        { label: 'Total', data: total,
           borderColor: '#f59e0b', borderWidth: 2, pointRadius: 0,
           fill: true, backgroundColor: '#f59e0b18', tension: 0.3 },
-        { label: 'Ch 1', data: readings.map(function(r) { return r.p1; }),
+        { label: 'Ch 1', data: ch1,
           borderColor: '#22c55e', borderWidth: 1.5, pointRadius: 0, borderDash: [4, 2],
           fill: false, tension: 0.3 },
-        { label: 'Ch 2', data: readings.map(function(r) { return r.p2; }),
+        { label: 'Ch 2', data: ch2,
           borderColor: '#38bdf8', borderWidth: 1.5, pointRadius: 0, borderDash: [4, 2],
           fill: false, tension: 0.3 }
       ]
@@ -211,7 +222,11 @@ function renderTodayChart(readings) {
       interaction: { mode: 'index', intersect: false },
       plugins: { legend: { display: true, labels: { color: '#94a3b8', boxWidth: 10, font: { size: 9 } } } },
       scales: {
-        x: Object.assign({}, axStyle, { ticks: { maxTicksLimit: 12 } }),
+        x: Object.assign({}, axStyle, {
+          type: 'time',
+          time: { unit: 'hour', tooltipFormat: 'HH:mm', displayFormats: { hour: 'HH:mm' } },
+          ticks: { color: '#64748b', font: { size: 8 }, maxTicksLimit: 12 }
+        }),
         y: Object.assign({}, axStyle, {
           min: 0,
           title: { display: true, text: 'Watts', color: '#64748b' }
@@ -219,6 +234,30 @@ function renderTodayChart(readings) {
       }
     }
   });
+}
+
+// Fetch and chart a specific day's power curve in the "Today" slot.
+async function loadDayDetail(date) {
+  try {
+    var readings = await fetchJSON('/api/ez1/today?date=' + encodeURIComponent(date));
+    detailDate = date;
+    renderTodayChart(readings);
+    document.getElementById('todayTitle').childNodes[0].nodeValue =
+      'Detailed Power Curve \u2014 ' + date + ' ';
+    document.getElementById('todayReset').style.display = 'inline';
+  } catch (e) {
+    /* leave the current chart in place on failure */
+  }
+}
+
+// Restore the live "Today's Power Curve" view.
+function showToday() {
+  detailDate = null;
+  if (todayReadings) {
+    renderTodayChart(todayReadings);
+  }
+  document.getElementById('todayTitle').childNodes[0].nodeValue = "Today's Power Curve ";
+  document.getElementById('todayReset').style.display = 'none';
 }
 
 function renderDailyChart(daily) {
@@ -241,6 +280,15 @@ function renderDailyChart(daily) {
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
       plugins: { legend: { display: false } },
+      onClick: function(evt, elements) {
+        if (elements && elements.length) {
+          var d = daily[elements[0].index];
+          if (d) loadDayDetail(d.date);
+        }
+      },
+      onHover: function(evt, elements) {
+        evt.native.target.style.cursor = elements.length ? 'pointer' : 'default';
+      },
       scales: {
         x: Object.assign({}, axStyle, { ticks: { maxRotation: 45 } }),
         y: Object.assign({}, axStyle, {
@@ -321,6 +369,10 @@ function renderAlarms(live) {
 }
 
 // Auto-refresh every 60s
+document.getElementById('todayReset').addEventListener('click', function(e) {
+  e.preventDefault();
+  showToday();
+});
 init();
 setInterval(init, 60000);
 </script>
