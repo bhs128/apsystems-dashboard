@@ -102,6 +102,7 @@
 var todayChartObj = null, dailyChartObj = null, channelChartObj = null;
 var todayReadings = null;      // cached readings for the current day
 var detailDate = null;         // non-null when viewing a historical day's detail
+var siteLat = null, siteLon = null;   // filled from /api/config
 
 function fmt(n, d) { return n.toLocaleString('en-US', {minimumFractionDigits: d, maximumFractionDigits: d}); }
 
@@ -111,6 +112,48 @@ async function fetchJSON(url) {
   var r = await fetch(url);
   if (!r.ok) throw new Error(url + ': ' + r.status);
   return r.json();
+}
+
+// Sunrise/sunset for a given day & location (SunCalc core algorithm by
+// Vladimir Agafonkin, MIT). Returns absolute Date instants.
+function sunTimes(date, lat, lng) {
+  var PI = Math.PI, rad = PI / 180, dayMs = 86400000, J1970 = 2440588, J2000 = 2451545;
+  var e = rad * 23.4397;   // obliquity of the Earth
+  function toDays(d) { return d.valueOf() / dayMs - 0.5 + J1970 - J2000; }
+  function fromJulian(j) { return new Date((j + 0.5 - J1970) * dayMs); }
+  function solarMeanAnomaly(d) { return rad * (357.5291 + 0.98560028 * d); }
+  function eclipticLongitude(M) {
+    var C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+    return M + C + rad * 102.9372 + PI;
+  }
+  function declination(L) { return Math.asin(Math.sin(0) * Math.cos(e) + Math.cos(0) * Math.sin(e) * Math.sin(L)); }
+  var J0 = 0.0009;
+  function hourAngle(h, phi, d) {
+    return Math.acos((Math.sin(h) - Math.sin(phi) * Math.sin(d)) / (Math.cos(phi) * Math.cos(d)));
+  }
+
+  var lw = rad * -lng, phi = rad * lat, d = toDays(date);
+  var n = Math.round(d - J0 - lw / (2 * PI));
+  var ds = J0 + (0 + lw) / (2 * PI) + n;
+  var M = solarMeanAnomaly(ds);
+  var L = eclipticLongitude(M);
+  var dec = declination(L);
+  var Jnoon = J2000 + ds + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
+  var h0 = -0.833 * rad;   // sun's disc touching the horizon (with refraction)
+  var w = hourAngle(h0, phi, dec);
+  var a = J0 + (w + lw) / (2 * PI) + n;
+  var Jset = J2000 + a + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
+  var Jrise = Jnoon - (Jset - Jnoon);
+  if (isNaN(Jset) || isNaN(Jrise)) return null;   // polar day/night
+  return { sunrise: fromJulian(Jrise), sunset: fromJulian(Jset) };
+}
+
+async function loadConfig() {
+  try {
+    var c = await fetchJSON('/api/config');
+    siteLat = (typeof c.lat === 'number') ? c.lat : null;
+    siteLon = (typeof c.lon === 'number') ? c.lon : null;
+  } catch (e) { /* fall back to auto-scaled axis */ }
 }
 
 async function init() {
@@ -207,6 +250,19 @@ function renderTodayChart(readings) {
   // number is a built-in Chart.js feature — no gap-detection code required.
   var MAX_GAP_MS = 150000;
 
+  // Clamp the x-axis to a half-hour before sunrise .. a half-hour after sunset
+  // for the charted day, so the curve fills the daylight window. Falls back to
+  // auto-scaling if the site location isn't configured.
+  var xMin, xMax;
+  if (siteLat !== null && siteLon !== null) {
+    var dayStr = readings[0].timestamp.slice(0, 10);
+    var st = sunTimes(new Date(dayStr + 'T12:00:00'), siteLat, siteLon);
+    if (st) {
+      xMin = new Date(st.sunrise.getTime() - 1800000);
+      xMax = new Date(st.sunset.getTime() + 1800000);
+    }
+  }
+
   todayChartObj = new Chart(document.getElementById('todayChart'), {
     type: 'line',
     data: {
@@ -230,7 +286,9 @@ function renderTodayChart(readings) {
         x: Object.assign({}, axStyle, {
           type: 'time',
           time: { unit: 'hour', tooltipFormat: 'HH:mm', displayFormats: { hour: 'HH:mm' } },
-          ticks: { color: '#64748b', font: { size: 8 }, maxTicksLimit: 12 }
+          ticks: { color: '#64748b', font: { size: 8 }, maxTicksLimit: 12 },
+          min: xMin,
+          max: xMax
         }),
         y: Object.assign({}, axStyle, {
           min: 0,
@@ -378,8 +436,10 @@ document.getElementById('todayReset').addEventListener('click', function(e) {
   e.preventDefault();
   showToday();
 });
-init();
-setInterval(init, 60000);
+loadConfig().then(function() {
+  init();
+  setInterval(init, 60000);
+});
 </script>
 </body>
 </html>
